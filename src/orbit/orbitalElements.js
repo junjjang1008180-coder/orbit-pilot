@@ -74,3 +74,32 @@ export function isCircularOrbitAchieved(orbit, orbitConfig) {
     orbit.eccentricity <= orbitConfig.maxCircularEccentricity
   );
 }
+
+/**
+ * 다음 근지점·원지점까지 남은 시간 (s) — 케플러 식
+ *   타원:   이심 이각 E (cos E = (1 − r/a)/e), 평균 이각 M = E − e·sin E, 평균 운동 n = √(μ/a³)
+ *   쌍곡선: 쌍곡 이각 F (cosh F = (1 − r/a)/e), M = e·sinh F − F (다가가는 중일 때만 근지점이 남음)
+ * @returns {{toPeriapsis:number|null, toApoapsis:number|null}} 없으면 null
+ */
+export function timeToApsides(position, velocity, mu) {
+  const r = vec3.length(position);
+  const orbit = computeOrbit(position, velocity, mu, 0);
+  const e = orbit.eccentricity;
+  const a = orbit.semiMajorAxis;
+  const approaching = vec3.dot(position, velocity) < 0; // 근지점 쪽으로 가는 중
+  if (!Number.isFinite(a) || e < 1e-6) return { toPeriapsis: null, toApoapsis: null };
+  if (!orbit.escape) {
+    const n = Math.sqrt(mu / a ** 3);
+    let E = Math.acos(Math.max(-1, Math.min(1, (1 - r / a) / e)));
+    if (approaching) E = 2 * Math.PI - E; // 원지점을 지나 근지점으로 가는 반쪽
+    const M = E - e * Math.sin(E);
+    const period = (2 * Math.PI) / n;
+    const toPeriapsis = (2 * Math.PI - M) / n;
+    const toApoapsis = (((Math.PI - M) / n) % period + period) % period;
+    return { toPeriapsis, toApoapsis };
+  }
+  if (!approaching) return { toPeriapsis: null, toApoapsis: null };
+  const n = Math.sqrt(mu / (-a) ** 3);
+  const F = Math.acosh(Math.max(1, (1 - r / a) / e));
+  return { toPeriapsis: (e * Math.sinh(F) - F) / n, toApoapsis: null };
+}

@@ -5,6 +5,7 @@
  * 아직 구현되지 않은 값은 숫자를 지어내지 않고 "미구현" 으로 표시한다.
  */
 import { formatNumber, formatDistance, formatSpeed } from './format.js';
+import { createGauges } from './gauges.js';
 
 /** @param {HTMLElement} root */
 export function createHud(root) {
@@ -12,6 +13,12 @@ export function createHud(root) {
     <div class="hud-banner" data-id="banner" role="status" aria-live="polite"></div>
     <ul class="hud-warnings" data-id="warnings" aria-live="polite"></ul>
     <div class="hud-warp" data-id="warp"></div>
+    <section class="hud-box hud-guide" data-id="guide" aria-label="비행 가이드" hidden>
+      <div class="hud-guide-title">🧭 비행 가이드 <small>(네비볼 하늘색 ◇ = 가이드 방향)</small></div>
+      <div class="hud-guide-text" data-id="guide-text"></div>
+    </section>
+    <div class="hud-gauges hud-gauges-left" data-id="gauges-left" aria-label="계기 (속도·고도·수직 속도)"></div>
+    <div class="hud-gauges hud-gauges-right" data-id="gauges-right" aria-label="계기 (G·TWR·연료)"></div>
 
     <div class="hud-left-stack">
       <section class="hud-box hud-landing" data-id="landing-box" aria-label="부스터 착륙 안내" hidden>
@@ -56,8 +63,8 @@ export function createHud(root) {
         <li><kbd>T</kbd> 자세 보조 모드 · <kbd>G</kbd> 자동 비행</li>
         <li><kbd>.</kbd>/<kbd>,</kbd> 시간 가속 빠르게/느리게</li>
         <li><kbd>R</kbd> RCS · <kbd>H</kbd>/<kbd>N</kbd> 앞뒤 · <kbd>J</kbd>/<kbd>L</kbd> 좌우 · <kbd>I</kbd>/<kbd>K</kbd> 아래위 · <kbd>U</kbd> 분리</li>
-        <li><kbd>P</kbd> 낙하산 펼치기</li>
-        <li>우클릭 드래그 카메라 회전 · 휠 확대/축소</li>
+        <li><kbd>P</kbd> 낙하산 펼치기 · <kbd>C</kbd> 1인칭 시점</li>
+        <li>드래그 카메라 회전 · 휠/핀치 확대/축소</li>
       </ul>
     </section>
   `;
@@ -79,6 +86,9 @@ export function createHud(root) {
   const targetTitle = $('target-title');
   const targetRows = $('target');
   const targetHint = $('target-hint');
+  const gauges = createGauges($('gauges-left'), $('gauges-right'));
+  const guideBox = $('guide');
+  const guideText = $('guide-text');
 
   const rows = (list) =>
     list.map(([k, v, cls = '']) => `<dt>${k}</dt><dd class="${cls}">${v}</dd>`).join('');
@@ -86,7 +96,8 @@ export function createHud(root) {
   /** 부스터 착륙 안내: 부스터를 조종 중일 때 기준과 현재 값을 나란히 보여준다 */
   function updateLanding(t) {
     const L = t.landing;
-    const show = L.active && (t.controlledVehicle === 'booster' || L.result);
+    // 착륙을 시도한(조종했거나 자동 착륙을 켠) 부스터만 안내한다
+    const show = L.active && (t.controlledVehicle === 'booster' || (L.result && L.attempted));
     landingBox.hidden = !show;
     if (!show) return;
     const lim = L.limits;
@@ -148,6 +159,16 @@ export function createHud(root) {
   }
 
   return {
+    /**
+     * 비행 가이드 글 (null 이면 숨김)
+     * @param {{text:string, level?:string} | null} guide
+     */
+    setGuide(guide) {
+      guideBox.hidden = !guide;
+      if (!guide) return;
+      guideBox.dataset.level = guide.level ?? 'info';
+      if (guideText.innerHTML !== guide.text) guideText.innerHTML = guide.text;
+    },
     /** 기동 패널을 붙일 자리 (main 에서 패널을 만든다) */
     maneuverRoot: $('maneuver-box'),
     /** @param {ReturnType<import('../core/simulation.js').FlightSimulation['getTelemetry']>} t */
@@ -161,8 +182,8 @@ export function createHud(root) {
         ['속도', formatSpeed(t.speed)],
         ['수직 속도', formatSpeed(t.verticalSpeed)],
         ['수평 속도', formatSpeed(t.horizontalSpeed)],
-        ['원지점', apoapsisText(t)],
-        ['근지점', periapsisText(t), t.impactTrajectory && !t.landed ? 'hud-warn' : ''],
+        ['원지점', `${apoapsisText(t)}${t.timeToApoapsis !== null && !t.landed ? ` <small>${formatDuration(t.timeToApoapsis)} 뒤</small>` : ''}`],
+        ['근지점', `${periapsisText(t)}${t.timeToPeriapsis !== null && !t.landed && t.periapsisAltitude >= 0 ? ` <small>${formatDuration(t.timeToPeriapsis)} 뒤</small>` : ''}`, t.impactTrajectory && !t.landed ? 'hud-warn' : ''],
         ['궤도', orbitStatusText(t), (onMoon ? t.moonOrbitAchieved : t.orbitAchieved) ? 'hud-ok' : ''],
         ...thermalRows(t),
         ...(e
@@ -187,6 +208,8 @@ export function createHud(root) {
         ['TWR', `${formatNumber(t.twr, 2)} <small>(최대 ${formatNumber(t.maxTwr, 2)})</small>`, t.canLiftOff ? '' : 'hud-warn'],
         ['남은 연료', `${formatNumber(t.fuel, 0)} kg <small>(${formatNumber(t.fuelRatio * 100, 0)}%)</small>`, hasWarning('lowfuel') || hasWarning('flameout') ? 'hud-warn' : ''],
         ['연료 소모', `${formatNumber(t.massFlow, 1)} kg/s`],
+        ['남은 Δv', `${formatNumber(t.deltaVStage, 0)} m/s <small>(전체 ${formatNumber(t.deltaVTotal, 0)})</small>`, t.deltaVTotal < 50 ? 'hud-warn' : ''],
+        ['연소 가능', t.maxThrust > 0 ? `${formatDuration(t.burnTimeLeft)} <small>(최대 추력)</small>` : '-'],
         ['총질량', `${formatNumber(t.mass, 0)} kg`],
         t.controlledVehicle === 'booster'
           ? ['조종 중', '1단 부스터 <small>(B: 로켓으로)</small>']
@@ -200,11 +223,12 @@ export function createHud(root) {
 
       updateLanding(t);
       updateTarget(t);
+      gauges.update(t);
 
       // 시간 가속 표시
       const w = t.timeWarp;
       warpBox.dataset.on = String(w.selected > 1);
-      warpBox.innerHTML = `⏩ 시간 <b>×${w.factor}</b>${w.selected > w.factor ? ` <small>(×${w.selected} 선택 · ${w.reason}이라 제한)</small>` : ''} <kbd>,</kbd><kbd>.</kbd>`;
+      warpBox.innerHTML = `<span class="hud-clock">${formatClock(t.missionTime)}</span> ⏩ 시간 <b>×${w.factor}</b>${w.selected > w.factor ? ` <small>(×${w.selected} 선택 · ${w.reason}이라 제한)</small>` : ''} <kbd>,</kbd><kbd>.</kbd>`;
 
       // 자동조종 상태
       const ap = t.autopilot;
@@ -237,6 +261,13 @@ const PHASE_LABELS = {
   entry: '재진입 (열 차폐막 앞으로)',
   chute: '낙하산 하강',
 };
+
+/** 경과 시간 → "T+00:12:34" */
+function formatClock(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const pad = (n) => String(n).padStart(2, '0');
+  return `T+${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
 
 /** 초 → "1시간 05분" · "12분 30초" · "45초" */
 export function formatDuration(seconds) {

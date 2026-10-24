@@ -17,6 +17,7 @@ import { toRenderPosition, toRenderLength } from '../scene/renderCoordinates.js'
  */
 export function createLandingZoneView(scene, config, planetView, modelLibrary = null) {
   let zone = null; // { group, position }
+  let zoneRadius = config.landing.landingZoneRadius; // 난이도에 따라 바뀐다 (setRadius)
 
   function build(position) {
     const frame = localFrame(position, config.planet.northPoleDirection);
@@ -28,7 +29,7 @@ export function createLandingZoneView(scene, config, planetView, modelLibrary = 
         new THREE.Vector3(...vec3.scale(frame.north, -1)),
       ),
     );
-    const radius = toRenderLength(config.landing.landingZoneRadius);
+    const radius = toRenderLength(zoneRadius);
     const model = modelLibrary?.createFitted('landingPad', { diameter: radius * 2 });
     if (model) {
       group.add(model);
@@ -66,6 +67,10 @@ export function createLandingZoneView(scene, config, planetView, modelLibrary = 
   }
 
   return {
+    /** 착륙 지점 반지름 (m) — 다음에 만드는 패드부터 적용 */
+    setRadius(radius) {
+      zoneRadius = radius;
+    },
     /**
      * @param {number[] | null} position 착륙 지점 지표 위치 (m), 없으면 null
      * @param {number[]} origin 화면 원점 (m)

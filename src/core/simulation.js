@@ -25,7 +25,7 @@ import { airDensity } from '../physics/aerodynamics.js';
 import { gravityMagnitudeAtRadius } from '../physics/gravity.js';
 import { vec3 } from '../physics/vectorMath.js';
 import { computeWarnings } from './flightWarnings.js';
-import { computeOrbit, isCircularOrbitAchieved } from '../orbit/orbitalElements.js';
+import { computeOrbit, isCircularOrbitAchieved, timeToApsides } from '../orbit/orbitalElements.js';
 import { localFrame, elevationAndHeading, toLocalENU } from '../physics/referenceFrame.js';
 import { predictImpactPoint, judgeBoosterLanding, surfaceDistance } from '../landing/landing.js';
 import { createManeuverNode, evaluateNode, estimateBurn, nodeDeltaV } from '../orbit/maneuver.js';
@@ -76,6 +76,12 @@ export class FlightSimulation {
     this.loadRocket(definition);
   }
 
+  /** 물리 설정 바꾸기 (난이도 적용 등, 다음 loadRocket/reset 부터 적용) */
+  setConfig(config) {
+    this.config = config;
+    this.stationPhaseCache.clear(); // 정거장 위치 미리 계산은 설정(물리)에 따라 달라진다
+  }
+
   /** 비행 조건 설정 (다음 loadRocket/reset 부터 적용) */
   setScenario(scenario) {
     this.scenario = { ...this.scenario, ...scenario };
@@ -95,6 +101,7 @@ export class FlightSimulation {
     this.maneuver = null; // 기동 노드 (로켓 본체 기준, 한 번에 하나)
     this.orbitAchievedAt = null; // 원궤도 진입 판정을 처음 만족한 시각 (s), 아직이면 null
     this.hasLiftedOff = false; // 한 번이라도 지면을 떠났는지
+    this.liftoffTime = null; // 이륙 시각 (s) — 경과 시간 표시용
     // 달
     this.referenceBodyId = 'planet'; // 로켓 본체가 지금 있는 중력권 ('planet' | 'moon')
     this.moonEncounteredAt = null; // 달 중력권에 처음 들어간 시각 (s)
@@ -225,6 +232,7 @@ export class FlightSimulation {
       if (!this.booster || this.booster.landingResult) return false;
       this.state.manualInput = idleInput();
       this.controlledId = this.booster.id;
+      this.booster.attempted = true;
     } else {
       this.getControlled().manualInput = idleInput();
       this.controlledId = 'rocket';
@@ -468,6 +476,7 @@ export class FlightSimulation {
     if (this.station && this.hasLiftedOff) stepAutopilot(this.station, this.autopilotContext(this.station, 'station', dt));
     stepAutopilot(this.state, this.autopilotContext(this.state, 'rocket', dt));
     for (const d of this.debris) stepAutopilot(d.vehicle, this.autopilotContext(d.vehicle, d.id, dt));
+    this.applyAssists(this.getControlled(), dt);
 
     // 2) 물리 진행
     if (this.station) this.stepStation(dt);
@@ -489,10 +498,39 @@ export class FlightSimulation {
         this.events.push({ type: 'landing', result: judged.result });
       }
     }
-    if (!this.state.landed) this.hasLiftedOff = true;
+    if (!this.state.landed && !this.hasLiftedOff) {
+      this.hasLiftedOff = true;
+      this.liftoffTime = this.state.time;
+    }
     this.maxAltitude = Math.max(this.maxAltitude, altitude(this.state, this.config));
     this.checkOrbitAchieved();
     this.updateReferenceBody();
+  }
+
+  /**
+   * 난이도 보조 기능 (직접 조종 중일 때만, 자동 비행 중에는 자동조종이 알아서 한다)
+   *   자동 스로틀 제한: 동압이 한계의 75% 를 넘으면 스로틀을 빠르게 낮춘다
+   *   자동 단 분리: 로켓 본체의 현재 단 연료가 다 떨어지면 다음 단으로
+   */
+  applyAssists(vehicle, dt) {
+    const assists = this.config.difficulty?.assists;
+    if (!assists || vehicle.autopilot.program || vehicle.destroyed || vehicle.aborted || vehicle.landed) return;
+    if (assists.throttleLimit && vehicle.engineOn && vehicle.throttle > 0.05) {
+      const limit = this.config.aerodynamics.maxDynamicPressure;
+      if (vehicle.dynamicPressure > 0.75 * limit) {
+        vehicle.throttle = Math.max(0.05, vehicle.throttle - 2 * this.config.controls.throttleRate * dt);
+        if (!vehicle.throttleLimited) announce(vehicle, '자동 스로틀 제한: 동압이 높아 스로틀을 낮췄어요');
+        vehicle.throttleLimited = true;
+      } else vehicle.throttleLimited = false;
+    }
+    if (assists.autoStage && vehicle === this.state && vehicle.engineOn && !hasFuel(vehicle) && vehicle.currentStage < vehicle.stages.length - 1) {
+      const throttle = vehicle.throttle;
+      if (this.separateStage({ force: true })) {
+        vehicle.throttle = throttle;
+        vehicle.engineOn = true;
+        announce(vehicle, '자동 단 분리 — 다음 단 점화');
+      }
+    }
   }
 
   /** 중력권이 바뀌었는지 확인하고, 달 미션용 기록(조우·달 궤도·달 착륙)을 남긴다 */
@@ -815,6 +853,7 @@ export class FlightSimulation {
         if (ok && landBooster && this.booster && !this.booster.vehicle.autopilot.program) {
           this.booster.vehicle.autopilot.program = 'landing';
           this.booster.vehicle.autopilot.phase = '';
+          this.booster.attempted = true;
         }
         return ok;
       },
@@ -932,6 +971,7 @@ export class FlightSimulation {
       tiltDeg: (Math.acos(Math.max(-1, Math.min(1, vec3.dot(noseDirection(vehicle), vec3.normalize(vehicle.position))))) * 180) / Math.PI,
       result: b.landingResult,
       reason: b.landingReason,
+      attempted: Boolean(b.attempted), // 조종했거나 자동 착륙을 켠 적이 있는지
       limits,
     };
   }
@@ -948,6 +988,30 @@ export class FlightSimulation {
       autoDockAvailable: this.canAutoDock(vehicle),
       limits: this.config.docking,
     };
+  }
+
+  /**
+   * 남은 Δv: 단마다 치올콥스키 식 (그 단 점화 때 질량 → 연료를 다 태운 질량)
+   * @returns {{stage:number, total:number, burnTime:number}}
+   */
+  deltaVBudget(s) {
+    let total = 0;
+    let stageDv = 0;
+    let burnTime = 0;
+    for (let i = s.currentStage; i < s.stages.length; i++) {
+      const st = s.stages[i];
+      if (st.maxThrust <= 0 || st.isp <= 0 || st.fuel <= 0) continue;
+      let m0 = 0;
+      for (let j = i; j < s.stages.length; j++) m0 += s.stages[j].dryMass + s.stages[j].fuel;
+      const ve = exhaustVelocity(st.isp, this.config);
+      const dv = ve * Math.log(m0 / (m0 - st.fuel));
+      total += dv;
+      if (i === s.currentStage) {
+        stageDv = dv;
+        burnTime = (st.fuel * ve) / st.maxThrust;
+      }
+    }
+    return { stage: stageDv, total, burnTime };
   }
 
   /** 비행체 하나의 표시용 값 */
@@ -972,6 +1036,8 @@ export class FlightSimulation {
     const frame = localFrame(rel.position, c.planet.northPoleDirection);
     const attitude = elevationAndHeading(noseDirection(s), frame); // 기수 고각·방위
     const moon = c.moon ? bodyAt('moon', s.time, c) : null;
+    const apsides = s.landed ? { toPeriapsis: null, toApoapsis: null } : timeToApsides(rel.position, rel.velocity, body.mu);
+    const budget = this.deltaVBudget(s);
     const telemetry = {
       time: s.time,
       referenceBody: { id: body.id, name: body.name }, // 기준 천체 (중력권)
@@ -982,6 +1048,14 @@ export class FlightSimulation {
       verticalSpeed, // 수직 속도, 위가 + (m/s)
       horizontalSpeed: Math.sqrt(Math.max(0, speed * speed - verticalSpeed * verticalSpeed)),
       mass: rocketMass(s), // 총질량 (kg)
+      // 계기판
+      gForce: (s.properAcceleration ?? 0) / c.constants.standardGravity, // 몸으로 느끼는 가속도 (g)
+      deltaVStage: budget.stage, // 현재 단으로 낼 수 있는 Δv (m/s, 진공 기준)
+      deltaVTotal: budget.total, // 남은 모든 단의 Δv 합 (m/s)
+      burnTimeLeft: budget.burnTime, // 현재 단 최대 추력 연소 가능 시간 (s)
+      timeToApoapsis: apsides.toApoapsis, // 다음 원지점까지 (s) 또는 null
+      timeToPeriapsis: apsides.toPeriapsis, // 다음 근지점까지 (s) 또는 null
+      missionTime: this.liftoffTime === null ? 0 : s.time - this.liftoffTime, // 이륙 후 경과 시간 (s)
       thrust, // 현재 추력 (N)
       maxThrust: maxThrust(s), // 현재 단 최대 추력 (N)
       localGravity: gravityMagnitudeAtRadius(vec3.length(rel.position), body.mu), // m/s²

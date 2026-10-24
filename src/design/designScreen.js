@@ -25,7 +25,8 @@ const DRAG_TYPE = 'application/x-orbit-pilot-part';
  *   presets: Record<string, {name:string, stages:{parts:string[]}[]}>,
  *   initialPreset: string,
  *   modelLibrary?: object,
- *   onLaunch: (launch: {definition:object, missionId:string, analysis:object}) => void,
+ *   onLaunch: (launch: {definition:object, missionId:string, difficulty:string, analysis:object}) => void,
+ *   difficulties?: Record<string, {name:string, description:string}>, initialDifficulty?: string,
  *   onTutorial?: () => void,
  * }} options
  */
@@ -45,6 +46,8 @@ export function createDesignScreen(root, options) {
   }
   let selected = null; // { source: 'palette'|'stack', partId, index? }
   let missionId = missionConfig.defaultMission;
+  const difficulties = options.difficulties ?? {};
+  let difficulty = options.initialDifficulty ?? Object.keys(difficulties)[0] ?? 'normal';
   let analysis = null;
 
   root.innerHTML = `
@@ -54,9 +57,13 @@ export function createDesignScreen(root, options) {
       <label class="design-mission">미션
         <select data-id="mission"></select>
       </label>
+      <label class="design-mission design-difficulty">난이도
+        <select data-id="difficulty"></select>
+      </label>
       <button type="button" class="design-launch" data-id="launch">발사 ▶</button>
     </header>
     <p class="design-mission-desc" data-id="mission-desc"></p>
+    <p class="design-mission-desc design-difficulty-desc" data-id="difficulty-desc"></p>
     <div class="design-body">
       <section class="design-palette" aria-label="부품 목록">
         <h2>부품 <small>끌어서 조립대에 놓기</small></h2>
@@ -118,6 +125,21 @@ export function createDesignScreen(root, options) {
   function renderMissionDesc() {
     $('mission-desc').textContent = `🎯 ${missionConfig.missions[missionId].description}`;
   }
+
+  // ── 난이도 선택 ──────────────────────────────────────────
+  const difficultySelect = $('difficulty');
+  for (const [id, d] of Object.entries(difficulties)) difficultySelect.add(new Option(d.name, id));
+  difficultySelect.value = difficulty;
+  difficultySelect.addEventListener('change', () => {
+    difficulty = difficultySelect.value;
+    renderDifficultyDesc();
+    options.onDifficultyChange?.(difficulty);
+  });
+  function renderDifficultyDesc() {
+    const d = difficulties[difficulty];
+    $('difficulty-desc').textContent = d ? `🎚 난이도 ${d.name}: ${d.description}` : '';
+  }
+  renderDifficultyDesc();
 
   // ── 예시 설계 ────────────────────────────────────────────
   const presetSelect = $('preset');
@@ -428,7 +450,7 @@ export function createDesignScreen(root, options) {
 
   $('launch').addEventListener('click', () => {
     if (!analysis.valid) return;
-    options.onLaunch({ definition: analysis.definition, missionId, analysis });
+    options.onLaunch({ definition: analysis.definition, missionId, difficulty, analysis });
   });
 
   // ── 3D 미리보기 ──────────────────────────────────────────
@@ -478,6 +500,14 @@ export function createDesignScreen(root, options) {
       missionSelect.value = id;
       renderMissionDesc();
     },
+    /** 난이도를 고른다 */
+    setDifficulty(id) {
+      if (!difficulties[id]) return;
+      difficulty = id;
+      difficultySelect.value = id;
+      renderDifficultyDesc();
+    },
+    getDifficulty: () => difficulty,
     /** 검수용 읽기 창구 */
     getStack: () => [...stack],
     getAnalysis: () => analysis,

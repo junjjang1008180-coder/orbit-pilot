@@ -53,7 +53,13 @@ export function createNavball(root, config) {
   const relativePrograde = makeRing(0x5ce1ff);
   const maneuverMarker = makeSquare(0x2f80ed);
   maneuverMarker.scale.setScalar(1.3);
-  scene.add(prograde, retrograde, target, dockTarget, dockAntiTarget, relativePrograde, maneuverMarker);
+  // 비행 가이드 방향: 하늘색 마름모 (가운데 점이 있는 굵은 모양)
+  const guideMarker = new THREE.Mesh(
+    new THREE.RingGeometry(0.075, 0.115, 4, 1, 0),
+    new THREE.MeshBasicMaterial({ color: 0x4fd1ff, side: THREE.DoubleSide }),
+  );
+  guideMarker.add(new THREE.Mesh(new THREE.CircleGeometry(0.025, 12), guideMarker.material));
+  scene.add(prograde, retrograde, target, dockTarget, dockAntiTarget, relativePrograde, maneuverMarker, guideMarker);
 
   const v = new THREE.Vector3();
   function placeMarker(marker, direction) {
@@ -71,13 +77,16 @@ export function createNavball(root, config) {
      * @param {number[] | null} [maneuverDirection] 기동 노드 연소 방향
      * @param {{position:number[], velocity:number[]} | null} [reference] 기준 천체(행성·달)의 위치·속도 —
      *   지평선과 진행 방향은 이 천체 기준으로 그린다
+     * @param {number[] | null} [guideDirection] 비행 가이드 방향 (하늘색 ◇)
      */
-    update(state, telemetry, targetPosition = null, dockingTarget = null, maneuverDirection = null, reference = null) {
+    update(state, telemetry, targetPosition = null, dockingTarget = null, maneuverDirection = null, reference = null, guideDirection = null) {
       const center = reference?.position ?? [0, 0, 0];
       const velocity = reference ? vec3.sub(state.velocity, reference.velocity) : state.velocity;
       const frame = localFrame(vec3.sub(state.position, center), config.planet.northPoleDirection);
       maneuverMarker.visible = Boolean(maneuverDirection) && vec3.length(maneuverDirection) > 1e-6;
       if (maneuverMarker.visible) placeMarker(maneuverMarker, toNavballVector(vec3.normalize(maneuverDirection), frame));
+      guideMarker.visible = Boolean(guideDirection) && vec3.length(guideDirection) > 1e-6;
+      if (guideMarker.visible) placeMarker(guideMarker, toNavballVector(vec3.normalize(guideDirection), frame));
       const nose = toNavballVector(quat.rotate(state.orientation, [0, 1, 0]), frame);
       const top = toNavballVector(quat.rotate(state.orientation, [0, 0, 1]), frame); // 화면 위쪽 = 로켓 등(+Z)
 

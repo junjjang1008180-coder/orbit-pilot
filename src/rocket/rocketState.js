@@ -66,6 +66,7 @@ export function createRocketState(config, rocket) {
     destroyed: false, // 기체 파손 여부 (Max-Q 초과, 지면 충돌)
     destroyedReason: '', // 파손 원인 설명
     touchdown: null, // 마지막 착지 판정 결과 (속도·기울기·안전 여부)
+    properAcceleration: planet.surfaceGravity, // 몸으로 느끼는 가속도 (m/s²) — 발사대 위에서는 1 g
     ...thermalAndParachuteState(config),
   };
 }
@@ -115,6 +116,7 @@ export function createSeparatedVehicle(parent, stage, motion) {
     destroyed: false,
     destroyedReason: '',
     touchdown: null,
+    properAcceleration: parent.properAcceleration ?? 0,
     skinTemperature: parent.skinTemperature,
     heatFlux: 0,
     heatShielded: false,

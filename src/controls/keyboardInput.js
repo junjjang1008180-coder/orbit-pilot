@@ -41,6 +41,7 @@ const ACTION_KEYS = {
   KeyR: 'toggleRcs', // RCS 평행이동 켜기/끄기
   KeyU: 'undock', // 정거장에서 분리
   KeyP: 'deployParachute', // 낙하산 펼치기
+  KeyC: 'toggleCamera', // 추적 ↔ 1인칭(조종석) 시점
   Period: 'warpUp', // 시간 가속 빠르게
   Comma: 'warpDown', // 시간 가속 느리게
 };

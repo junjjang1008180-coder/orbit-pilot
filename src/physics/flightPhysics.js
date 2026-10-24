@@ -134,6 +134,9 @@ export function stepFlight(state, config, dt) {
   // 이번 스텝에 엔진·RCS 가 실제로 준 속도 변화 (기동 노드 남은 Δv 계산용)
   state.lastDeltaV = vec3.add(vec3.scale(nose, thrustDeltaV), vec3.scale(rcs, dt));
 
+  // 몸으로 느끼는 가속도(중력 제외: 추력·항력·RCS, 지면 위에서는 지면 반력) — G 계기용 (m/s²)
+  state.properAcceleration = vec3.length(vec3.add(vec3.scale(nose, thrustDeltaV / dt), vec3.sub(otherAcceleration, gravityStart)));
+
   if (state.landed) {
     // 지면에 서 있을 때는 지면 반력이 아래로 누르는 힘을 받쳐 준다.
     // 위쪽 방향 알짜 가속도(서 있는 천체 기준)가 0 이하(= TWR ≤ 1)이면 움직이지 않는다.
@@ -152,6 +155,7 @@ export function stepFlight(state, config, dt) {
       }
       state.liftoffBlocked = burn.thrust > 0;
       state.dynamicPressure = 0;
+      state.properAcceleration = vec3.length(vec3.sub(gravityStart, surfaceBody.acceleration)); // 지면 반력 = 중력
       state.time += dt;
       return;
     }

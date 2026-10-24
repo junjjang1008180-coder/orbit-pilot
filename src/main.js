@@ -9,6 +9,8 @@
  */
 import * as THREE from 'three';
 import { PHYSICS_CONFIG } from './config/physicsConfig.js';
+import { DIFFICULTY_LEVELS, DEFAULT_DIFFICULTY, applyDifficulty } from './config/difficulty.js';
+import { computeGuide } from './autopilot/flightGuide.js';
 import { MISSION_CONFIG } from './config/missionConfig.js';
 import { ASSET_CONFIG } from './config/assetConfig.js';
 import { FlightSimulation } from './core/simulation.js';
@@ -44,6 +46,7 @@ import { createStationView } from './docking/stationView.js';
 import { createManeuverPanel } from './ui/maneuverPanel.js';
 import { createParachuteView } from './effects/parachuteView.js';
 import { createReentryGlow } from './effects/reentryGlow.js';
+import { createCockpitView } from './scene/cockpitView.js';
 
 const config = PHYSICS_CONFIG;
 
@@ -72,6 +75,7 @@ const debrisViews = createDebrisViews(scene, config);
 const explosions = createExplosionEffects(scene);
 const landingZoneView = createLandingZoneView(scene, config, planetView, modelLibrary);
 const reentryGlow = createReentryGlow(scene);
+const cockpitView = createCockpitView(scene); // 1인칭 조종석 실내
 const parachuteView = createParachuteView();
 
 let rocketView;
@@ -110,7 +114,32 @@ function ensureRocketFlame(stageIndex) {
 const mapCameraObject = new THREE.PerspectiveCamera(50, 1, 1, 1e6);
 registerCamera(mapCameraObject);
 const mapCamera = createMapCamera(mapCameraObject, config);
-const mapView = createMapView(config, document.getElementById('map-labels'));
+const mapView = createMapView(config, document.getElementById('map-labels'), {
+  onFocus: (mode) => mapCamera.setFocusMode(mode),
+  onReset: () => mapCamera.reset(),
+});
+const MAP_FOCUS_ORDER = ['auto', 'rocket', 'planet', 'moon'];
+const mapKeysHeld = new Set(); // 지도 화면에서 누르고 있는 방향키
+
+// 지도 화면 키: 방향키 회전, +/− 확대·축소, F 초점 바꾸기, 0 초기화 (비행 키와 겹치지 않는 키만)
+window.addEventListener('keydown', (e) => {
+  if (viewMode !== 'map' || appMode !== 'flight' || e.metaKey || e.target instanceof HTMLInputElement) return;
+  if (e.code.startsWith('Arrow')) {
+    mapKeysHeld.add(e.code);
+    e.preventDefault();
+  } else if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+    mapCamera.zoom(-180);
+  } else if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+    mapCamera.zoom(180);
+  } else if (e.code === 'KeyF' && !e.repeat) {
+    const i = MAP_FOCUS_ORDER.indexOf(mapCamera.getFocusMode());
+    mapCamera.setFocusMode(MAP_FOCUS_ORDER[(i + 1) % MAP_FOCUS_ORDER.length]);
+  } else if (e.code === 'Digit0' && !e.repeat) {
+    mapCamera.reset();
+  }
+});
+window.addEventListener('keyup', (e) => mapKeysHeld.delete(e.code));
+window.addEventListener('blur', () => mapKeysHeld.clear());
 let viewMode = 'flight'; // 'flight' = 비행 화면, 'map' = 지도 화면
 
 function setViewMode(mode) {
@@ -132,13 +161,31 @@ createCameraMouseInput(renderer.domElement, {
     cameraInteractions++;
     (viewMode === 'map' ? mapCamera : chaseCamera).zoom(dy);
   },
+  // 지도에서 행성·달을 더블클릭하면 그 천체로 초점
+  onDoubleClick: (x, y) => {
+    if (viewMode !== 'map') return;
+    const body = mapView.pickBody(x, y, mapCameraObject, { width: viewportElement.clientWidth, height: viewportElement.clientHeight });
+    if (body) mapCamera.setFocusMode(body);
+  },
 });
 const flightControls = createFlightControls(() => simulation, {
   isEnabled: () => appMode === 'flight', // 설계 화면에서는 비행 키를 무시
   onUiAction: (action) => {
     if (action === 'toggleMap') setViewMode(viewMode === 'map' ? 'flight' : 'map');
+    if (action === 'toggleCamera') {
+      const mode = chaseCamera.toggleMode();
+      document.body.dataset.camera = mode;
+      cockpitFrame.hidden = mode !== 'cockpit';
+    }
   },
 });
+
+// 1인칭 시점 창틀 (화면 가장자리 어두운 테두리와 안내)
+const cockpitFrame = document.createElement('div');
+cockpitFrame.className = 'cockpit-frame';
+cockpitFrame.hidden = true;
+cockpitFrame.innerHTML = '<span>👨‍🚀 1인칭 시점 · 드래그 = 둘러보기 · 휠 = 시야각 · <kbd>C</kbd> 추적 시점</span>';
+document.body.appendChild(cockpitFrame);
 
 // ── UI ───────────────────────────────────────────────────
 const hud = createHud(document.getElementById('hud'));
@@ -164,7 +211,7 @@ const maneuverPanel = createManeuverPanel(hud.maneuverRoot, {
     if (e.button !== 0 || !down || viewMode !== 'map' || appMode !== 'flight') return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     down = null;
-    if (moved > 5 || simulation.getControlled() !== simulation.state) return;
+    if (moved > 3 || simulation.getControlled() !== simulation.state) return;
     const time = mapView.pickOrbitTime(e.clientX, e.clientY, simulation, mapCameraObject, {
       width: viewportElement.clientWidth,
       height: viewportElement.clientHeight,
@@ -190,10 +237,17 @@ const designScreen = createDesignScreen(document.getElementById('design-screen')
   missionConfig: MISSION_CONFIG,
   presets: config.testRockets,
   initialPreset: config.defaultTestRocket,
+  difficulties: DIFFICULTY_LEVELS,
+  initialDifficulty: loadDifficulty(),
+  onDifficultyChange: saveDifficulty,
   modelLibrary,
   onTutorial: () => tutorial.start(),
-  onLaunch: ({ definition, missionId }) => {
+  onLaunch: ({ definition, missionId, difficulty }) => {
     currentMissionId = missionId;
+    saveDifficulty(difficulty);
+    // 난이도: 기준값을 바꾼 물리 설정으로 비행한다 (원래 설정은 그대로)
+    simulation.setConfig(applyDifficulty(config, difficulty));
+    landingZoneView.setRadius(simulation.config.landing.landingZoneRadius);
     // 도킹 미션이면 우주 정거장을 띄운다
     const mission = MISSION_CONFIG.missions[missionId];
     simulation.setScenario({ station: Boolean(mission.spawnsStation), boosterRecovery: Boolean(mission.usesLanding) });
@@ -212,10 +266,27 @@ const tutorial = createTutorial(document.getElementById('tutorial'), {
   },
 });
 
+/** 난이도 기억 (이 브라우저) */
+function loadDifficulty() {
+  try {
+    const saved = localStorage.getItem('orbitPilot.difficulty');
+    return DIFFICULTY_LEVELS[saved] ? saved : DEFAULT_DIFFICULTY;
+  } catch {
+    return DEFAULT_DIFFICULTY;
+  }
+}
+function saveDifficulty(level) {
+  try {
+    localStorage.setItem('orbitPilot.difficulty', level);
+  } catch {
+    /* 저장할 수 없으면 무시 */
+  }
+}
+
 /** 현재 로켓으로 새 비행 시작 (발사대에서) */
 function startFlight() {
   simulation.reset();
-  missionTracker = createMissionTracker(currentMissionId, { missions: MISSION_CONFIG, physics: config });
+  missionTracker = createMissionTracker(currentMissionId, { missions: MISSION_CONFIG, physics: simulation.config });
   lastMissionStatus = 'active';
   missionPanel.hideResult();
   flightControls.keyboard.releaseAll();
@@ -303,6 +374,10 @@ function frame(now) {
     ? rocketView.height
     : rocketView.stageHeights[simulation.booster.stageIndex];
   chaseCamera.update(controlled, controlledHeight, reference.position);
+  // 1인칭: 조종석 실내를 눈 위치·로켓 자세에 맞춰 두고, 로켓 겉모습은 숨긴다 (눈이 캡슐 안)
+  const inCockpit = chaseCamera.getMode() === 'cockpit' && viewMode === 'flight';
+  cockpitView.update(inCockpit, camera.position, controlled.orientation, telemetry, now / 1000);
+  if (inCockpit && controlled === state) rocketView.group.visible = false;
   updateEnvironment(
     vec3.normalize(controlled.position),
     telemetry.planetAltitude,
@@ -314,6 +389,9 @@ function frame(now) {
   sound.updateEngine(controlled.destroyed ? 0 : thrustFraction(controlled));
 
   hud.update(telemetry);
+  // 비행 가이드 (난이도에서 켰을 때)
+  const guide = simulation.config.difficulty?.assists.guide ? computeGuide(simulation, telemetry) : null;
+  hud.setGuide(guide);
   maneuverPanel.update(telemetry);
   // 부스터를 조종 중이면 착륙 지점 방향, 로켓이면 도킹 목표(정거장) 방향을 네비볼에 표시
   navball.update(
@@ -323,6 +401,7 @@ function frame(now) {
     simulation.getTarget(controlled),
     telemetry.maneuver?.direction ?? null,
     reference,
+    guide?.direction ?? null,
   );
   const missionStatus = missionTracker.update(simulation.getMissionTelemetry());
   // 미션 결과가 처음 나온 순간 시간 가속을 멈춘다
@@ -332,11 +411,19 @@ function frame(now) {
   tutorial.update({ appMode, viewMode, telemetry, cameraInteractions }, now / 1000);
 
   if (viewMode === 'map') {
-    mapCamera.update(mapView.focusFor(simulation));
-    mapView.update(simulation, mapCameraObject, {
-      width: viewportElement.clientWidth,
-      height: viewportElement.clientHeight,
-    });
+    // 방향키로 회전 (누르고 있는 동안)
+    const keyRotate = 220 * realDt;
+    if (mapKeysHeld.has('ArrowLeft')) mapCamera.rotate(-keyRotate, 0);
+    if (mapKeysHeld.has('ArrowRight')) mapCamera.rotate(keyRotate, 0);
+    if (mapKeysHeld.has('ArrowUp')) mapCamera.rotate(0, keyRotate);
+    if (mapKeysHeld.has('ArrowDown')) mapCamera.rotate(0, -keyRotate);
+    mapCamera.update(mapView.focusFor(simulation, mapCamera.getFocusMode()), realDt);
+    mapView.update(
+      simulation,
+      mapCameraObject,
+      { width: viewportElement.clientWidth, height: viewportElement.clientHeight },
+      mapCamera.getFocusMode(),
+    );
     renderer.render(mapView.scene, mapCameraObject);
   } else {
     renderer.render(scene, camera);
