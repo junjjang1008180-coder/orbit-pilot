@@ -195,7 +195,8 @@ const designScreen = createDesignScreen(document.getElementById('design-screen')
   onLaunch: ({ definition, missionId }) => {
     currentMissionId = missionId;
     // 도킹 미션이면 우주 정거장을 띄운다
-    simulation.setScenario({ station: Boolean(MISSION_CONFIG.missions[missionId].spawnsStation) });
+    const mission = MISSION_CONFIG.missions[missionId];
+    simulation.setScenario({ station: Boolean(mission.spawnsStation), boosterRecovery: Boolean(mission.usesLanding) });
     simulation.loadRocket(definition); // 설계한 부품·질량·연료·단 구성이 그대로 비행에 쓰인다
     startFlight();
   },

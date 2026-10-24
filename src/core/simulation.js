@@ -70,7 +70,8 @@ export class FlightSimulation {
   constructor(config, definition, scenario = {}) {
     this.config = config;
     this.accumulator = 0;
-    this.scenario = { station: false, ...scenario }; // station: 도킹 미션용 우주 정거장을 띄울지
+    // station: 도킹 미션용 우주 정거장을 띄울지, boosterRecovery: 부스터 착륙 미션 (1단 연료를 남기고 분리)
+    this.scenario = { station: false, boosterRecovery: false, ...scenario };
     this.stationPhaseCache = new Map(); // 로켓 구성별 정거장 위상각 (미리 계산 결과)
     this.loadRocket(definition);
   }
@@ -270,7 +271,13 @@ export class FlightSimulation {
     if (v.destroyed || v.aborted) return null;
     let program = null;
     if (v !== this.state) {
-      if (this.booster?.landingZone && !this.booster.landingResult) program = 'landing';
+      if (this.booster?.landingZone && !this.booster.landingResult) {
+        if (!hasFuel(v)) {
+          announce(v, '부스터에 연료가 없어 자동 착륙을 할 수 없어요 (1단 연료를 남기고 분리하세요)');
+          return null;
+        }
+        program = 'landing';
+      }
     } else if (this.maneuver && !v.landed) {
       program = 'maneuver';
     } else if (this.canAutoDock?.(v)) {
@@ -369,7 +376,8 @@ export class FlightSimulation {
       this.accumulator -= fixedTimeStep;
       steps++;
       // 중요한 사건이 생기면 시간 가속을 멈춘다 (나머지 가속분은 버림)
-      if (warp > 1 && this.events.slice(eventCount).some((e) => this.breaksTimeWarp(e))) {
+      // (경고 등으로 지금은 1× 로 제한되어 있어도, 고른 배율이 1 보다 크면 1 로 되돌린다)
+      if (this.timeWarpSelected > 1 && this.events.slice(eventCount).some((e) => this.breaksTimeWarp(e))) {
         this.timeWarpSelected = 1;
         this.accumulator = Math.min(this.accumulator, fixedTimeStep);
       }
@@ -468,7 +476,12 @@ export class FlightSimulation {
     if (this.station) this.updateDocking();
     for (const d of this.debris) {
       this.stepVehicle(d.vehicle, d.id, dt);
-      if (d.isBooster && !d.landingResult && d.vehicle.touchdown) {
+      if (d.isBooster && !d.landingResult && d.vehicle.destroyed && !d.vehicle.touchdown) {
+        // 땅에 닿기 전에 부서짐 (Max-Q·과열 등)
+        d.landingResult = 'failure';
+        d.landingReason = d.vehicle.destroyedReason;
+        this.events.push({ type: 'landing', result: 'failure' });
+      } else if (d.isBooster && !d.landingResult && d.vehicle.touchdown) {
         const judged = judgeBoosterLanding(d.vehicle, d.landingZone, this.config);
         d.landingResult = judged.result;
         d.landingReason = judged.reason;
@@ -796,7 +809,17 @@ export class FlightSimulation {
       reference: () => this.getReference(vehicle),
       orbitCircularNow: () => !vehicle.landed && isCircularOrbitAchieved(this.getOrbit(vehicle), this.config.orbit),
       canStage: isRocket && !vehicle.destroyed && vehicle.currentStage < vehicle.stages.length - 1,
-      separateStage: () => this.separateStage({ force: true }),
+      separateStage: ({ landBooster = false } = {}) => {
+        const ok = this.separateStage({ force: true });
+        // 착륙용 연료를 남기고 떼어 낸 1단은 바로 자동 착륙을 시작한다
+        if (ok && landBooster && this.booster && !this.booster.vehicle.autopilot.program) {
+          this.booster.vehicle.autopilot.program = 'landing';
+          this.booster.vehicle.autopilot.phase = '';
+        }
+        return ok;
+      },
+      // 부스터 착륙 미션에서 1단에 남길 연료 비율 (0 = 다 쓴다)
+      boosterReserve: isRocket && this.scenario.boosterRecovery && !this.booster ? this.config.autopilot.boosterReserveFuelRatio : 0,
       deployParachute: () => this.deployParachuteFor(vehicle),
       landingZone: debris?.isBooster ? debris.landingZone : null,
       target: this.getTarget(vehicle),

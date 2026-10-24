@@ -201,16 +201,34 @@ function setThrottle(vehicle, value) {
 }
 
 // ── 자동 궤도 진입 ────────────────────────────────────────
+// 로켓마다 추력·무게가 달라도 동작하도록, 정해진 기울기표에 "원지점까지 남은 시간" 피드백을 더한다.
+//   상승: 고도에 따라 기울이되, 원지점까지 남은 시간이 너무 짧으면(추력이 약해 떨어지는 중) 기수를 들고,
+//         너무 길면(너무 가파름) 더 눕혀 수평 속도를 번다.
+//   원지점이 목표에 닿으면: 원궤도 연소 시간의 절반보다 원지점이 멀면 엔진을 끄고 기다리고, 아니면 바로 연소.
+//   원궤도 연소: 수평으로 밀면서, 수직 속도를 0 근처로 붙잡는 만큼만 기수를 든다
+//               (필요한 위쪽 가속도 = 중력 − 원심 가속도 + 수직 속도 보정).
 function orbitProgram(vehicle, ctx) {
   const { config, dt } = ctx;
   const a = config.autopilot;
   const ap = vehicle.autopilot;
   const frame = localFrame(vehicle.position, config.planet.northPoleDirection);
-  const alt = vec3.length(vehicle.position) - config.planet.radius;
+  const r = vec3.length(vehicle.position);
+  const alt = r - config.planet.radius;
   const verticalSpeed = vec3.dot(vehicle.velocity, frame.up);
   const orbit = ctx.orbit();
   const q = vehicle.dynamicPressure;
   const qLimit = config.aerodynamics.maxDynamicPressure;
+  const top = config.atmosphere.topAltitude;
+  const target = a.targetApoapsisAltitude;
+
+  // 부스터 착륙 미션: 1단 연료를 착륙용으로 남기고 분리 (부스터는 자동 착륙을 시작)
+  const firstStage = vehicle.stages[vehicle.currentStage];
+  if (ctx.boosterReserve > 0 && ctx.canStage && !vehicle.landed && firstStage?.maxThrust > 0 &&
+      firstStage.fuel <= ctx.boosterReserve * firstStage.fuelCapacity) {
+    ctx.separateStage({ landBooster: true });
+    setThrottle(vehicle, 1);
+    announce(vehicle, `1단 연료 ${Math.round(ctx.boosterReserve * 100)}% 를 남기고 분리 — 부스터는 자동 착륙 중 (B 로 지켜보기)`);
+  }
 
   // 연료가 떨어지면 다음 단으로
   if (vehicle.engineOn && !hasFuel(vehicle)) {
@@ -218,17 +236,41 @@ function orbitProgram(vehicle, ctx) {
       ctx.separateStage();
       setThrottle(vehicle, 1);
     } else {
-      stopProgram(vehicle, '연료가 다 떨어져 자동 비행을 멈췄어요');
+      setThrottle(vehicle, 0);
+      stopProgram(vehicle, `연료가 다 떨어져 자동 비행을 멈췄어요 (원지점 ${Math.round(orbit.apoapsisAltitude / 1000)} km · 근지점 ${Math.round(orbit.periapsisAltitude / 1000)} km) — Δv 가 더 큰 로켓이 필요해요`);
       return {};
     }
   }
 
   // 진행 방향의 수평 성분 (없으면 동쪽)
   const horizontalVelocity = vec3.addScaled(vehicle.velocity, frame.up, -verticalSpeed);
-  const horizontal = vec3.length(horizontalVelocity) > 1 ? vec3.normalize(horizontalVelocity) : frame.east;
+  const horizontalSpeed = vec3.length(horizontalVelocity);
+  const horizontal = horizontalSpeed > 1 ? vec3.scale(horizontalVelocity, 1 / horizontalSpeed) : frame.east;
   const tilted = (angleFromVerticalDeg, toward) => {
     const t = (angleFromVerticalDeg * Math.PI) / 180;
     return vec3.add(vec3.scale(frame.up, Math.cos(t)), vec3.scale(toward, Math.sin(t)));
+  };
+  // 실제로 느끼는 아래 방향 가속도 = 중력 − 원심 가속도 (궤도 속도에 가까울수록 0)
+  const effectiveGravity = config.planet.mu / (r * r) - (horizontalSpeed * horizontalSpeed) / r;
+  const timeToApoapsis = verticalSpeed > 0 ? verticalSpeed / Math.max(0.3, effectiveGravity) : 0;
+  const stage = vehicle.stages[vehicle.currentStage];
+  const mass = vehicle.stages.slice(vehicle.currentStage).reduce((m, st) => m + st.dryMass + st.fuel, 0);
+  const thrustAcc = stage && mass > 0 ? stage.maxThrust / mass : 0;
+  // 원지점에서 원궤도로 만드는 데 필요한 Δv 와 연소 시간 (대략)
+  const circularizeBurnTime = () => {
+    if (orbit.escape || thrustAcc <= 0) return 0;
+    const ra = orbit.apoapsisRadius;
+    const vAtApoapsis = vec3.length(orbit.angularMomentum) / ra;
+    return Math.max(0, Math.sqrt(config.planet.mu / ra) - vAtApoapsis) / thrustAcc;
+  };
+
+  // 공기가 진할 때는 기수를 진행 방향 가까이에 둔다 (받음각이 크면 자세 불안정 경고·공기저항)
+  const speed = vec3.length(vehicle.velocity);
+  // relaxed: 추력이 약해 고도를 잃는 중이면 기수를 더 들 수 있게 60° 까지 허용 (경고가 떠도 떨어지는 것보다 낫다)
+  const airSafeDirection = (direction, relaxed = false) => {
+    if (speed < 50 || q < 300) return direction;
+    const maxAoA = (relaxed ? 60 : q >= 1_000 ? 9 : 9 + (30 - 9) * ((1_000 - q) / 700)) * (Math.PI / 180);
+    return limitAngleFrom(vec3.scale(vehicle.velocity, 1 / speed), direction, maxAoA);
   };
 
   if (!ap.phase) ap.phase = 'ascent';
@@ -238,45 +280,80 @@ function orbitProgram(vehicle, ctx) {
     if (q > a.maxQThrottleDownRatio * qLimit) setThrottle(vehicle, vehicle.throttle - config.controls.throttleRate * dt);
     else if (q < a.maxQThrottleUpRatio * qLimit) setThrottle(vehicle, 1);
     const progress = Math.max(0, Math.min(1, (alt - a.gravityTurnStartAltitude) / (a.gravityTurnEndAltitude - a.gravityTurnStartAltitude)));
-    const direction = tilted(progress * a.gravityTurnMaxAngleDeg, frame.east);
-    if (!orbit.escape && orbit.apoapsisAltitude >= a.targetApoapsisAltitude) {
-      setThrottle(vehicle, 0);
-      ap.phase = 'coast';
-      announce(vehicle, `원지점 ${Math.round(orbit.apoapsisAltitude / 1000)} km — 엔진을 끄고 원지점까지 올라가요`);
+    let angle = a.gravityTurnMaxAngleDeg * progress ** 0.7;
+    const wanted = 15 + 30 * progress; // 원지점까지 남은 시간 목표 (15 s → 45 s)
+    const losingHeight = progress > 0 && timeToApoapsis < wanted * 0.6;
+    if (progress > 0) {
+      // 원지점까지 남은 시간 피드백
+      if (timeToApoapsis < wanted) angle -= (wanted - timeToApoapsis) * 2;
+      else if (timeToApoapsis > wanted + 30) angle += (timeToApoapsis - wanted - 30) * 0.5;
+      angle = Math.max(0, Math.min(88, angle));
     }
-    return { attitude: steerToward(vehicle, direction, a) };
+    if (!orbit.escape && orbit.apoapsisAltitude >= target) {
+      const burnTime = circularizeBurnTime();
+      if (timeToApoapsis > burnTime / 2 + 10) {
+        setThrottle(vehicle, 0);
+        ap.phase = 'coast';
+        announce(vehicle, `원지점 ${Math.round(orbit.apoapsisAltitude / 1000)} km — 엔진을 끄고 원지점 근처까지 올라가요`);
+      } else {
+        ap.phase = 'circularize';
+        setThrottle(vehicle, 1);
+        announce(vehicle, '원지점에 거의 왔어요 — 바로 원궤도 연소');
+      }
+    }
+    return { attitude: steerToward(vehicle, airSafeDirection(tilted(angle, horizontalSpeed > 30 ? horizontal : frame.east), losingHeight), a) };
   }
 
   if (ap.phase === 'coast') {
-    const top = config.atmosphere.topAltitude;
-    // 원지점 근처에 오거나, 대기 밖에서 떨어지기 시작하면 원궤도 연소
-    if ((verticalSpeed < a.circularizeStartVerticalSpeed && alt > top) || (verticalSpeed < 0 && alt <= top)) {
+    // 대기 안에서 공기저항으로 원지점이 많이 낮아졌으면 다시 상승
+    if (alt < top && verticalSpeed > 0 && orbit.apoapsisAltitude < target - 3_000) {
+      ap.phase = 'ascent';
+      setThrottle(vehicle, 1);
+      return { attitude: steerToward(vehicle, horizontal, a) };
+    }
+    // 원지점까지 남은 시간이 연소 시간의 절반이 되면(또는 떨어지기 시작하면) 원궤도 연소
+    if ((alt > top && timeToApoapsis <= circularizeBurnTime() / 2 + 1) || verticalSpeed <= 0) {
       ap.phase = 'circularize';
       setThrottle(vehicle, 1);
       announce(vehicle, '원궤도 연소 시작');
     }
-    return { attitude: steerToward(vehicle, horizontal, a) };
+    // 연소 방향(수평)을 미리 보되, 공기가 진하면 진행 방향에서 크게 벗어나지 않게
+    return { attitude: steerToward(vehicle, airSafeDirection(horizontal), a) };
   }
 
   if (ap.phase === 'circularize') {
-    // 추력이 약한 로켓은 원궤도가 되기 전에 원지점이 크게 올라갈 수 있다 → 엔진을 끄고 새 원지점까지 기다린다
-    if (verticalSpeed > 0 && (orbit.escape || orbit.apoapsisAltitude > a.targetApoapsisAltitude * 2)) {
+    // 원지점이 크게 올라가 버리면 엔진을 끄고 새 원지점에서 다시 연소한다
+    if (verticalSpeed > 0 && (orbit.escape || orbit.apoapsisAltitude > target * 2)) {
       setThrottle(vehicle, 0);
       ap.phase = 'coast';
       announce(vehicle, '원지점이 높아졌어요 — 엔진을 끄고 새 원지점에서 다시 연소해요');
       return { attitude: steerToward(vehicle, horizontal, a) };
     }
-    const lift = Math.max(-20, Math.min(35, -verticalSpeed * a.circularizePitchPerVerticalSpeed));
-    const direction = tilted(90 - lift, horizontal);
     if (ctx.orbitCircularNow()) {
       setThrottle(vehicle, 0);
       stopProgram(vehicle, '원궤도 진입 완료! 자세 보조를 진행 방향으로 맞춰 둘게요');
       vehicle.autopilot.sas = 'prograde';
       return {};
     }
-    return { attitude: steerToward(vehicle, direction, a) };
+    // 대기 근처에서는 조금씩 올라가고, 그 위에서는 지금 높이를 유지한다
+    const wantedVerticalSpeed = alt < top + 5_000 ? Math.min(30, (top + 10_000 - alt) / 30) : 0;
+    const upward = effectiveGravity + 0.1 * (wantedVerticalSpeed - verticalSpeed);
+    const sinLift = Math.max(Math.sin((-15 * Math.PI) / 180), Math.min(Math.sin((45 * Math.PI) / 180), upward / Math.max(0.1, thrustAcc)));
+    const lift = (Math.asin(sinLift) * 180) / Math.PI;
+    setThrottle(vehicle, 1);
+    return { attitude: steerToward(vehicle, tilted(90 - lift, horizontal), a) };
   }
   return {};
+}
+
+/** 방향 dir 이 기준 base 에서 maxAngle(rad) 보다 벌어지면 그 각도까지만 (같은 평면에서) 당긴다 */
+function limitAngleFrom(base, dir, maxAngle) {
+  const d = vec3.normalize(dir);
+  const angle = Math.acos(Math.max(-1, Math.min(1, vec3.dot(base, d))));
+  if (angle <= maxAngle) return d;
+  const side = vec3.addScaled(d, base, -vec3.dot(d, base));
+  if (vec3.length(side) < 1e-9) return base;
+  return vec3.add(vec3.scale(base, Math.cos(maxAngle)), vec3.scale(vec3.normalize(side), Math.sin(maxAngle)));
 }
 
 // ── 기동 노드 실행 ───────────────────────────────────────
@@ -333,29 +410,57 @@ function landingProgram(vehicle, ctx) {
   const toZone = vec3.sub(zone, vehicle.position);
   const horizToZone = vec3.addScaled(toZone, up, -vec3.dot(toZone, up));
   const hv = vec3.addScaled(vehicle.velocity, up, -vs);
+  const hSpeed = vec3.length(hv);
   const stage = vehicle.stages[vehicle.currentStage];
   const amax = stage.maxThrust / (stage.dryMass + stage.fuel);
   const g = config.planet.surfaceGravity;
+  const maxTiltRad = (25 * Math.PI) / 180;
   // 동압이 한계의 60% 를 넘지 않는 속도
   const rho = Math.max(1e-6, airDensity(alt, config.atmosphere));
   const vSafe = Math.sqrt((2 * 0.6 * config.aerodynamics.maxDynamicPressure) / rho);
   const dist = vec3.length(horizToZone);
-  // 착륙 지점 쪽으로 향하는 목표 수평 속도 (가까울수록 느리게)
-  const desiredH = dist > 0.5 ? vec3.scale(vec3.normalize(horizToZone), Math.min(60, dist * 0.08, Math.sqrt(3 * dist))) : [0, 0, 0];
-  // 제동 가능한 목표 하강 속도
-  const brakeVs = Math.sqrt(2 * Math.max(0.5, amax * 0.25) * Math.max(0, alt - 15));
-  const targetVs = -Math.max(dist > 15 && alt < 60 ? 0.5 : 2.5, Math.min(vSafe * 0.9, brakeVs));
-  const acc = vec3.add(vec3.scale(vec3.sub(desiredH, hv), 0.8), vec3.scale(up, (targetVs - vs) * 3 + g));
+  // 착륙 지점 바로 위에서 거의 멈췄으면 수직 하강, 아니면 낮은 고도(HOVER)를 지키며 접근
+  const HOVER = 50;
+  const overZone = dist <= 12 && hSpeed < 2.5;
+  // 착륙 지점 쪽 목표 수평 속도: 기울여 낼 수 있는 가속도로 제때 멈출 수 있는 만큼만 (가까울수록 느리게)
+  const lateralAcc = Math.max(0.5, amax * Math.sin(maxTiltRad) * 0.5);
+  // 높은 곳: 남은 거리를 예상 낙하 시간(자유 낙하 기준) 동안 갈 수 있는 속도 — 지나치게 줄여 못 미치지 않도록
+  const fallHeight = Math.max(0, alt - HOVER);
+  const descent = Math.max(0, -vs);
+  const fallTime = Math.max(1, (-descent + Math.sqrt(descent * descent + 2 * g * fallHeight)) / g);
+  const desiredHSpeed = dist <= 0.5
+    ? 0
+    : alt > 2_000
+      ? Math.min(800, dist / fallTime)
+      : Math.min(alt < 200 ? 25 : 60, Math.sqrt(2 * lateralAcc * dist) * 0.7, dist * 0.15 + 0.3);
+  const desiredH = dist > 0.5 ? vec3.scale(vec3.normalize(horizToZone), desiredHSpeed) : [0, 0, 0];
+  // 제동 가능한 하강 속도 (남은 높이에서 최대 추력의 일부로 멈출 수 있는 속도)
+  const brakeSpeed = (above) => Math.sqrt(2 * Math.max(0.5, amax * 0.35 - g) * Math.max(0, above));
+  let targetVs;
+  if (overZone) targetVs = -Math.max(1, Math.min(alt * 0.15, brakeSpeed(alt - 10), 12));
+  else if (alt < HOVER * 3) targetVs = Math.max(-8, Math.min(5, (HOVER - alt) * 0.3));
+  else {
+    // 동압은 전체 속도로 정해지므로, 수평 속도를 뺀 만큼만 수직으로 떨어진다
+    const verticalSafe = Math.sqrt(Math.max(0, (vSafe * 0.9) ** 2 - hSpeed * hSpeed));
+    targetVs = -Math.max(3, Math.min(verticalSafe, brakeSpeed(alt - HOVER)));
+  }
+  const acc = vec3.add(vec3.scale(vec3.sub(desiredH, hv), 0.8), vec3.scale(up, (targetVs - vs) * 2 + g));
   let dir = vec3.normalize(vec3.dot(acc, up) > 0.1 ? acc : up);
-  const maxTilt = ((alt < 8 ? 2 : 25) * Math.PI) / 180;
+  // 기울기 제한: 높은 곳에서는 크게 기울여 수평 속도를 줄이고(역추진), 낮은 곳에서는 25°,
+  // 착륙 지점 위 마지막 수직 하강에서는 거의 똑바로
+  const maxTilt = overZone && alt < 15 ? (3 * Math.PI) / 180 : alt > 2_000 ? (75 * Math.PI) / 180 : maxTiltRad;
   if (vec3.dot(dir, up) < Math.cos(maxTilt)) {
     const h = vec3.addScaled(dir, up, -vec3.dot(dir, up));
     dir = vec3.length(h) > 1e-6 ? vec3.add(vec3.scale(up, Math.cos(maxTilt)), vec3.scale(vec3.normalize(h), Math.sin(maxTilt))) : up;
   }
   const nose = noseOf(vehicle);
-  const throttle = vec3.dot(nose, dir) > 0.85 ? Math.min(1, Math.max(0, vec3.dot(acc, nose)) / amax) : vs < -5 && alt < 300 ? 0.3 : 0;
+  // 아직 방향을 다 못 돌렸어도, 빠르게 떨어지는 중이면 위쪽 성분만큼은 밀어 감속한다
+  const alignment = vec3.dot(nose, dir);
+  const throttle = alignment > 0.85
+    ? Math.min(1, Math.max(0, vec3.dot(acc, nose)) / amax)
+    : vec3.dot(nose, up) > 0.5 && vs < targetVs - 5 ? Math.min(1, ((targetVs - vs) * 2 + g) / amax) : 0;
   setThrottle(vehicle, throttle);
-  vehicle.autopilot.phase = alt > 15_000 ? 'coast' : vehicle.dynamicPressure > 1000 ? 'descent' : 'final';
+  vehicle.autopilot.phase = alt > 15_000 ? 'coast' : overZone ? 'final' : alt < HOVER * 3 ? 'approach' : 'descent';
   return { attitude: steerToward(vehicle, dir, a) };
 }
 

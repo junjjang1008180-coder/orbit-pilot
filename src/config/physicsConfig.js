@@ -143,6 +143,8 @@ export const PHYSICS_CONFIG = deepFreeze({
     circularizeStartVerticalSpeed: 120, // 수직 속도(m/s)가 이 값보다 작아지면 원궤도 연소 시작
     circularizePitchPerVerticalSpeed: 0.25, // 떨어지는 속도 1 m/s 당 기수를 드는 각도 (°)
     reentryPeriapsisAltitude: 30_000, // 자동 재진입: 역추진으로 낮출 근지점 고도 (m)
+    // 부스터 착륙 미션: 자동 궤도 진입이 1단 연료를 이 비율만큼 남기고 분리한다 (착륙용 연료)
+    boosterReserveFuelRatio: 0.35,
   },
 
   // ── 재진입 가열 ───────────────────────────────────────────

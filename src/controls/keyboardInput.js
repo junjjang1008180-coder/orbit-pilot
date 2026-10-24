@@ -67,7 +67,14 @@ export function createKeyboardInput({ onAction, target = window, isEnabled = () 
   const held = new Set();
 
   function onKeyDown(event) {
+    // macOS 는 ⌘ 를 누른 동안 다른 키의 keyup 을 보내지 않아 키가 눌린 채로 남는다 → ⌘ 조합은 무시하고 모두 해제
+    if (event.metaKey || event.key === 'Meta') {
+      releaseAll();
+      return;
+    }
     if (!isEnabled() || isTypingTarget(event.target)) return;
+    // Ctrl·Option 과 함께 누른 동작 키(예: 한/영 전환 Ctrl+Space)는 게임 동작으로 보지 않는다
+    if ((event.ctrlKey || event.altKey) && ACTION_KEYS[event.code]) return;
     const hold = HOLD_KEYS[event.code];
     const action = ACTION_KEYS[event.code] ?? (event.code ? undefined : ACTION_BY_CHARACTER[event.key]);
     if (!hold && !action) return;
@@ -77,6 +84,10 @@ export function createKeyboardInput({ onAction, target = window, isEnabled = () 
   }
 
   function onKeyUp(event) {
+    if (event.key === 'Meta') {
+      releaseAll();
+      return;
+    }
     const hold = HOLD_KEYS[event.code];
     if (hold) held.delete(hold);
   }
