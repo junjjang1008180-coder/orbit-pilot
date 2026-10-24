@@ -380,7 +380,7 @@ export const PHYSICS_CONFIG = deepFreeze({
       length: 0.6,
       radius: 0.55,
       maxTemperature: 1_300,
-      canopyArea: 400, // 다 펼친 면적 (m²) — 1톤이면 해수면에서 약 5.5 m/s 로 내려온다
+      canopyArea: 450, // 다 펼친 면적 (m²) — 1톤이면 해수면에서 약 5.2 m/s, 2개면 약 3.7 m/s
       semiArea: 25, // 보조 낙하산(처음) 면적 (m²)
     },
     decoupler: {
@@ -415,13 +415,14 @@ export const PHYSICS_CONFIG = deepFreeze({
         { parts: ['engineVacuum', 'tankSmall', 'capsule'] },
       ],
     },
-    // 재진입·회수용: 1단 → 2단(궤도 진입·역추진) → 회수 캡슐(열 차폐막 + 캡슐 + 낙하산)
+    // 재진입·회수용: 1단 → 2단(궤도 진입·역추진) → 회수 캡슐(열 차폐막 + 캡슐 + 낙하산 2개)
+    // 낙하산 2개(900 m²)면 1.1톤 캡슐이 해수면에서 약 3.9 m/s — 어려움 난이도 기준(4 m/s)도 통과한다
     recovery: {
       name: '회수 캡슐 로켓 (3단)',
       stages: [
         { parts: ['engineLifter', 'tankLarge', 'decoupler'] },
         { parts: ['engineVacuum', 'tankSmall', 'decoupler'] },
-        { parts: ['heatShield', 'capsule', 'parachute'] },
+        { parts: ['heatShield', 'capsule', 'parachute', 'parachute'] },
       ],
     },
     // 달 미션용: 1단(대형 엔진) → 2단(궤도 진입·달 전이·달 궤도 진입) → 착륙선

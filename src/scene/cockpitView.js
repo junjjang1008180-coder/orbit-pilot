@@ -6,11 +6,13 @@
  *   - 금속 창틀 + 볼트 + 살짝 비치는 유리, 창문 가운데 얇은 창살
  *   - 창문 아래 비스듬한 계기판: 실시간 화면 3개(비행 · 엔진 · 궤도)와 작은 버튼·표시등
  *   - 따뜻한 실내등 (밤이나 우주에서도 실내가 보이게)
+ *   - 조종간·스로틀 레버·머리 위 스위치 패널·표시등·의자 등 세부 (cockpitControls.js, 실제 입력을 따라 움직임)
  * 좌표: 로컬 +Y = 앞(기수), +Z = 위(로켓 등 쪽, 네비볼 위와 같음), +X = 오른쪽. 원점 = 눈 위치.
  * 실내는 로켓 자세를 따라 돌고, 고개를 돌려도(카메라만 돌아감) 창문은 제자리에 있다.
  */
 import * as THREE from 'three';
 import { formatNumber } from '../ui/format.js';
+import { createCockpitControls } from './cockpitControls.js';
 
 const WALL_DISTANCE = 0.9; // 눈에서 앞 벽까지 (m)
 const WINDOW_W = 1.3; // 창문 너비 (m)
@@ -156,18 +158,14 @@ export function createCockpitView(scene) {
     dash.add(b);
     lamps.push({ mat, color: new THREE.Color(color), phase: i * 1.7 });
   }
-  for (const x of [-0.92, 0.92]) {
-    // 양 끝 손잡이 스위치
-    const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 16), metal);
-    knob.rotation.x = Math.PI / 2;
-    knob.position.set(x, 0.05, 0.06);
-    dash.add(knob);
-  }
+  // 조종간·스로틀·머리 위 패널·표시등·의자 등
+  const controls = createCockpitControls(group, { metal, darkMetal, padMat });
+  controls.attachToDash(dash);
 
-  // 위쪽 손잡이 막대 (머리 위)
+  // 천장 손잡이 막대
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1.1, 10), metal);
   handle.rotation.z = Math.PI / 2;
-  handle.position.set(0, 0.55, 0.78);
+  handle.position.set(0, -0.25, 1.0);
   group.add(handle);
 
   // 실내등 (따뜻한 빛, 가까운 곳만)
@@ -204,15 +202,18 @@ export function createCockpitView(scene) {
     /**
      * @param {boolean} visible 1인칭 시점인지
      * @param {THREE.Vector3} eye 눈 위치 (화면 좌표)
-     * @param {number[]} orientation 로켓 자세 쿼터니언
+     * @param {object} vehicle 조종 중인 비행체 상태 (자세·조종 입력·스로틀)
      * @param {object} t 텔레메트리 (화면 글자)
      * @param {number} time 화면 시각 (s)
+     * @param {number} dt 화면 프레임 시간 (s)
      */
-    update(visible, eye, orientation, t, time) {
+    update(visible, eye, vehicle, t, time, dt) {
       group.visible = visible;
       if (!visible) return;
+      const orientation = vehicle.orientation;
       group.position.copy(eye);
       group.quaternion.set(orientation[0], orientation[1], orientation[2], orientation[3]);
+      controls.update(vehicle, t, time, dt);
       // 로컬 축 맞추기: 그룹의 +Y = 기수, +Z = 로켓 등 (로켓 로컬 축과 같다)
       for (const l of lamps) l.mat.color.copy(l.color).multiplyScalar(0.55 + 0.45 * (0.5 + 0.5 * Math.sin(time * 1.3 + l.phase)));
       if (time - lastScreenTime < 0.2) return; // 화면 글자는 0.2 초마다

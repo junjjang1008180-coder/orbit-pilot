@@ -68,7 +68,7 @@ export function createChaseCamera(camera, config) {
     toggleMode() {
       mode = mode === 'chase' ? 'cockpit' : 'chase';
       look.yaw = 0;
-      look.pitch = 0;
+      look.pitch = -0.12; // 살짝 아래를 봐서 창문과 계기판·조종간이 함께 보이게
       camera.fov = mode === 'cockpit' ? look.fov : chaseFov;
       camera.updateProjectionMatrix();
       return mode;

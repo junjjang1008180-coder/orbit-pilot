@@ -696,3 +696,5 @@ body[data-view="map"] .hud-warnings { top: 140px; }
 .cockpit-frame[hidden] { display: none; }
 .cockpit-frame span { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); padding: 3px 10px; border-radius: 6px; background: rgba(0,0,0,0.55); color: var(--muted); font-size: 12px; }
 body[data-view="map"] .cockpit-frame { display: none; }
+/* 1인칭에서는 조종석 계기판이 있으니 아래 다이얼 계기를 숨긴다 */
+body[data-camera="cockpit"] .hud-gauges { display: none; }

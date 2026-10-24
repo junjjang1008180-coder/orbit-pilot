@@ -376,7 +376,7 @@ function frame(now) {
   chaseCamera.update(controlled, controlledHeight, reference.position);
   // 1인칭: 조종석 실내를 눈 위치·로켓 자세에 맞춰 두고, 로켓 겉모습은 숨긴다 (눈이 캡슐 안)
   const inCockpit = chaseCamera.getMode() === 'cockpit' && viewMode === 'flight';
-  cockpitView.update(inCockpit, camera.position, controlled.orientation, telemetry, now / 1000);
+  cockpitView.update(inCockpit, camera.position, controlled, telemetry, now / 1000, realDt);
   if (inCockpit && controlled === state) rocketView.group.visible = false;
   updateEnvironment(
     vec3.normalize(controlled.position),

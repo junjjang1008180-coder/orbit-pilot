@@ -31,7 +31,7 @@ export const DIFFICULTY_LEVELS = Object.freeze({
   },
   hard: {
     name: '어려움',
-    description: '기준이 엄격해요 (Max-Q 12 kPa · 착지 수직 4 m/s · 수평 2 m/s · 기울기 7° · 열 130%). 보조 기능이 없어요.',
+    description: '기준이 엄격해요 (Max-Q 12 kPa · 착지 수직 4 m/s · 수평 2 m/s · 기울기 7° · 열 130%). 보조 기능이 없어요. 낙하산 회수는 낙하산 2개가 필요해요.',
     assists: { guide: false, throttleLimit: false, autoStage: false },
     physics: {
       aerodynamics: { maxDynamicPressure: 12_000 },
