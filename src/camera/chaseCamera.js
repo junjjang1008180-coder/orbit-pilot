@@ -84,13 +84,15 @@ export function createChaseCamera(camera, config) {
      * @param {object} state 로켓 물리 상태 (읽기 전용)
      * @param {number} rocketHeight 로켓 모델 높이 (화면 단위)
      * @param {number[]} [bodyCenter] 지평선 기준 천체 중심 (달 근처에서는 달 중심, m)
+     * @param {number[]|null} [eyeLocal] 1인칭 눈 위치 (로켓 로컬 좌표, m) — 없으면 기수 끝 (우주 왕복선은 비행 갑판)
      */
-    update(state, rocketHeight, bodyCenter = [0, 0, 0]) {
+    update(state, rocketHeight, bodyCenter = [0, 0, 0], eyeLocal = null) {
       if (mode === 'cockpit') {
         // 기수 끝 바로 앞에서, 기수 방향을 고개 각도만큼 돌린 쪽을 본다 (로컬: 앞 +Y, 위 +Z, 오른쪽 +X)
         q.set(...state.orientation);
         nose.set(0, 1, 0).applyQuaternion(q);
-        camera.position.copy(nose).multiplyScalar(rocketHeight + 0.4);
+        if (eyeLocal) camera.position.set(...eyeLocal).applyQuaternion(q);
+        else camera.position.copy(nose).multiplyScalar(rocketHeight + 0.4);
         const cy = Math.cos(look.yaw);
         const sy = Math.sin(look.yaw);
         const cp = Math.cos(look.pitch);

@@ -254,6 +254,80 @@ export const PHYSICS_CONFIG = deepFreeze({
     padRadius: 15, // 발사대 상판 반지름 (m). 이 안에서는 상판 높이가 지면이다.
   },
 
+  // ── 활주로 (우주 왕복선 착륙) ─────────────────────────────
+  // 발사장에서 동쪽으로 떨어진 곳에 동서 방향으로 놓인다 (적도 궤도의 지상 궤적과 나란함).
+  runway: {
+    distanceEast: 8_000, // (예전 설정 호환) 발사장 활주로까지 동쪽 거리 (m) — 실제 목록은 runways
+    length: 4_500, // 길이 (m)
+    width: 90, // 너비 (m)
+    tolerance: 30, // 착지·활주 때 활주로 가장자리·끝 밖으로 봐주는 여유 (m) — 풀밭 갓길까지
+  },
+  // 착륙할 수 있는 활주로들: 발사장에서 동쪽으로 궤도 지상 궤적을 따라 (행성 둘레 약 3,770 km)
+  // terrain: 활주로 둘레 땅 (화면 표시용) — grass 풀밭 · sand 모래섬 · desert 사막
+  runways: [
+    { id: 'home', name: '발사장 활주로', distanceEast: 8_000, distanceNorth: 0, terrain: 'grass' },
+    { id: 'island', name: '동쪽 섬 활주로', distanceEast: 940_000, distanceNorth: 0, terrain: 'sand' },
+    { id: 'desert', name: '반대편 사막 활주로', distanceEast: 1_880_000, distanceNorth: 0, terrain: 'desert' },
+    { id: 'coast', name: '서쪽 해안 활주로', distanceEast: 2_830_000, distanceNorth: 0, terrain: 'grass' },
+  ],
+
+  // ── 우주 왕복선 ───────────────────────────────────────────
+  // 날개로 뜨는 궤도선의 공기역학 (궤도선 단이 맨 아래 단일 때만):
+  //   양력 L = q·S·CL,  CL = liftSlope · sin(2α)        (α = 받음각, 기수가 진행 방향보다 위로 든 각)
+  //   항력 D = q·S·CD,  CD = CD0 + k·sin²α (+ 바퀴·에어브레이크)
+  //   양력 방향 = 진행 방향에 수직이고 궤도선 윗면(로컬 +Z) 쪽 — 기체를 굴리면(뱅크) 양력이 기울어 방향을 돈다
+  // 무게·면적은 축소 행성에 맞춘 게임 값이다 (겉모습은 실제 비율).
+  shuttle: {
+    wingArea: 60, // 날개 기준 면적 S (m²)
+    maxDynamicPressure: 40_000, // 궤도선 구조가 버티는 동압 (Pa) — 활공은 로켓보다 동압이 높다
+    liftSlope: 1.2, // CL 최대값 (α = 45° 에서)
+    zeroLiftDrag: 0.06, // CD0
+    inducedDrag: 1.4, // k
+    gearDrag: 0.03, // 바퀴를 내리면 늘어나는 CD
+    speedbrakeDrag: 0.1, // 에어브레이크를 다 펴면 늘어나는 CD
+    // 수직 꼬리날개: 옆미끄럼(β)을 줄이는 쪽으로 기수를 돌리는 빠르기 (1/s, 동압 1 kPa 기준, 최대 0.6 rad/s)
+    yawStability: 0.8,
+    // 배 쪽 열 차폐 타일: 받음각이 이 범위면 배가 공기를 맞아 타일 한계 온도까지 버틴다
+    tileAngleMinDeg: 10,
+    tileAngleMaxDeg: 80,
+    tileMaxTemperature: 2_800,
+    // 스택 기준점(고체 부스터 노즐 끝, 외부 탱크 축) → 궤도선 기준점(주 바퀴 접지점), 로컬 좌표 (m)
+    orbiterOffset: [0, 17, 2.7],
+    // 바퀴 착지 기준 (바퀴를 내리고 활주로 위)
+    touchdown: {
+      maxVerticalSpeed: 5, // 수직 하강 속도 (m/s)
+      maxSpeed: 150, // 땅에 닿을 때 최대 속력 (m/s)
+      maxNoseDownDeg: 5, // 기수 고각 범위: −이 값 ~ maxPitchDeg (°) — 앞바퀴부터 세게 닿으면 안 된다
+      maxPitchDeg: 20,
+      maxRollDeg: 15, // 좌우 기울기 (°)
+    },
+    // 지상 활주
+    rolling: {
+      friction: 0.02, // 바퀴 굴림 마찰 (g 의 배수)
+      brake: 0.15, // 브레이크 (g 의 배수)
+      steerRateDeg: 4, // A/D 로 기수 방향을 바꾸는 최대 속도 (°/s)
+      derotateRateDeg: 3, // 앞바퀴가 내려앉는 속도 (°/s)
+      maxOffRunwaySpeed: 25, // 이보다 빠르게 활주로(+ 여유)를 벗어나면 파손 (m/s)
+    },
+    // 자동 귀환·착륙 (G)
+    autopilot: {
+      deorbitPeriapsisAltitude: 20_000, // 역추진으로 낮출 근지점 (m)
+      entryAlphaDeg: 40, // 재진입 받음각 (°) — 배 쪽 타일로 열을 받는다
+      maxEntryBankDeg: 80, // 거리 조절용 최대 뱅크 (°)
+      interfaceAltitude: 15_000, // 이 고도부터 활공 접근 (m)
+      glideSlopeDeg: 18, // 접근 활공각 (°) — 실제 왕복선처럼 가파르다
+      aimPointPastThreshold: 300, // 겨냥점: 활주로 시작점을 이 거리(m) 지난 곳 — 플레어로 더 날아가는 거리
+      preflareAltitude: 140, // 이 고도(m)부터 기수를 들어 하강을 늦춘다 (플레어)
+      flareRate: 0.2, // 플레어 중 목표 하강 속도 = 고도 × 이 값 (m/s)
+      flareMinSink: 1.8, // 마지막 하강 속도 (m/s) — 착지 기준(3 m/s)보다 작게
+      gearAltitude: 400, // 바퀴를 내리는 고도 (m)
+      approachSpeedMin: 115, // 접근 속도 범위 (m/s) — 빠르면 에어브레이크
+      approachSpeedMax: 150,
+    },
+    // 활공 착륙 연습 미션 시작점: 활주로 시작점에서 서쪽으로, 이 고도·속도로 동쪽을 향해
+    glideStart: { distanceWest: 37_000, altitude: 12_000, speed: 230, descentAngleDeg: 10, alphaDeg: 7 },
+  },
+
   // ── 부품 목록 ─────────────────────────────────────────────
   // dryMass: 연료를 뺀 질량 (kg)        fuelMass: 실을 수 있는 연료 질량 (kg)
   // thrust:  최대 추력 (N)               isp:      비추력 (s)
@@ -383,6 +457,110 @@ export const PHYSICS_CONFIG = deepFreeze({
       canopyArea: 450, // 다 펼친 면적 (m²) — 1톤이면 해수면에서 약 5.2 m/s, 2개면 약 3.7 m/s
       semiArea: 25, // 보조 낙하산(처음) 면적 (m²)
     },
+    // ── 우주 왕복선 전용 부품 (예시 설계 「우주 왕복선」 으로만 쓴다, 부품 목록에는 안 보임) ──
+    srbPair: {
+      name: '고체 로켓 부스터 (2개)',
+      kind: 'engine',
+      shuttle: true,
+      hidden: true,
+      mount: 'side', // 외부 탱크 옆에 붙는다 (떼어 내도 기준점이 바뀌지 않음)
+      dryMass: 5_000,
+      fuelMass: 24_000,
+      thrust: 650_000,
+      isp: 260,
+      length: 45,
+      radius: 1.85,
+      maxTemperature: 1_700,
+    },
+    srbSeparator: {
+      name: '고체 부스터 분리 장치',
+      kind: 'decoupler',
+      shuttle: true,
+      hidden: true,
+      mount: 'side',
+      dryMass: 0,
+      fuelMass: 0,
+      thrust: 0,
+      isp: 0,
+      length: 0,
+      radius: 0,
+      maxTemperature: 1_700,
+    },
+    externalTank: {
+      name: '외부 탱크',
+      kind: 'tank',
+      shuttle: true,
+      hidden: true,
+      mount: 'side',
+      dryMass: 2_500,
+      fuelMass: 18_000,
+      thrust: 0,
+      isp: 0,
+      length: 47,
+      radius: 4.2,
+      maxTemperature: 1_300,
+    },
+    mainEngines: {
+      // 궤도선 꼬리의 주 엔진 3개는 외부 탱크 연료를 쓰므로, 물리에서는 외부 탱크 단의 엔진으로 계산한다
+      // (질량은 궤도선에 포함). 고체 부스터와 함께 발사 때 점화된다.
+      name: '주 엔진 (외부 탱크 연료)',
+      kind: 'engine',
+      shuttle: true,
+      hidden: true,
+      ignitesWithStageBelow: true,
+      dryMass: 0,
+      fuelMass: 0,
+      thrust: 300_000,
+      isp: 420,
+      length: 0,
+      radius: 0,
+      maxTemperature: 1_700,
+    },
+    etSeparator: {
+      name: '외부 탱크 분리 장치',
+      kind: 'decoupler',
+      shuttle: true,
+      hidden: true,
+      mount: 'side',
+      dryMass: 0,
+      fuelMass: 0,
+      thrust: 0,
+      isp: 0,
+      length: 0,
+      radius: 0,
+      maxTemperature: 1_300,
+    },
+    orbiter: {
+      name: '궤도선 (궤도 조종 엔진)',
+      kind: 'orbiter',
+      shuttle: true,
+      hidden: true,
+      winged: true, // 날개 공기역학·바퀴 착륙
+      dryMass: 9_000,
+      fuelMass: 1_200,
+      thrust: 30_000,
+      isp: 316,
+      length: 37,
+      radius: 2.6,
+      maxTemperature: 1_500, // 배가 아닌 쪽(윗면)이 공기를 맞을 때
+      dockingPort: true,
+    },
+    dragChute: {
+      name: '감속 낙하산',
+      kind: 'parachute',
+      shuttle: true,
+      hidden: true,
+      dryMass: 100,
+      fuelMass: 0,
+      thrust: 0,
+      isp: 0,
+      length: 0,
+      radius: 0,
+      maxTemperature: 1_500,
+      canopyArea: 5, // 활주로에서 감속용 (m²)
+      semiArea: 5,
+      maxDeploySpeed: 110, // 이보다 빠르면 찢어진다 (m/s)
+    },
     decoupler: {
       name: '단 분리기',
       kind: 'decoupler',
@@ -423,6 +601,15 @@ export const PHYSICS_CONFIG = deepFreeze({
         { parts: ['engineLifter', 'tankLarge', 'decoupler'] },
         { parts: ['engineVacuum', 'tankSmall', 'decoupler'] },
         { parts: ['heatShield', 'capsule', 'parachute', 'parachute'] },
+      ],
+    },
+    // 우주 왕복선: 1단 고체 부스터 2개(+ 주 엔진 동시 점화) → 2단 외부 탱크(주 엔진) → 궤도선
+    shuttle: {
+      name: '우주 왕복선',
+      stages: [
+        { parts: ['srbPair', 'srbSeparator'] },
+        { parts: ['externalTank', 'mainEngines', 'etSeparator'] },
+        { parts: ['orbiter', 'dragChute'] },
       ],
     },
     // 달 미션용: 1단(대형 엔진) → 2단(궤도 진입·달 전이·달 궤도 진입) → 착륙선

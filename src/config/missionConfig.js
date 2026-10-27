@@ -67,6 +67,23 @@ export const MISSION_CONFIG = deepFreeze({
       usesOrbitAccuracy: false,
       usesLanding: false,
     },
+    shuttleOrbit: {
+      name: '우주 왕복선 궤도 왕복',
+      description: '우주 왕복선으로 궤도에 오른 뒤(G = 자동 궤도 진입, 외부 탱크 자동 분리) 역추진·재진입하고, 활공해 활주로에 바퀴로 착륙해 멈추세요. 궤도에서 G = 자동 귀환·착륙, Y = 바퀴, V = 브레이크, P = 감속 낙하산. (예시 설계 「우주 왕복선」)',
+      usesOrbitAccuracy: false,
+      usesLanding: false,
+      requiresShuttle: true, // 예시 설계 「우주 왕복선」 으로만 할 수 있다
+      landsOnRunway: true, // 활주로 위를 굴러가는 동안은 "지면 복귀 실패" 가 아니다
+    },
+    shuttleGlide: {
+      name: '왕복선 활공 착륙 연습',
+      description: '궤도선만 활주로 서쪽 37 km · 고도 12 km 에서 활공하며 시작해요. 엔진 없이 활공각 18° 로 내려와 Y 로 바퀴를 내리고, 기수를 들어(플레어) 활주로에 살며시 닿은 뒤 V(브레이크)·P(감속 낙하산)로 멈추세요. G = 자동 착륙. (예시 설계 「우주 왕복선」)',
+      usesOrbitAccuracy: false,
+      usesLanding: false,
+      requiresShuttle: true,
+      landsOnRunway: true,
+      startsGliding: true, // 발사 대신 활공 시작점에서 출발
+    },
     moonLanding: {
       name: '달 착륙',
       description: '달 표면에 안전하게 착륙하세요 (수직 6 m/s · 수평 3 m/s · 기울기 10° 이하). 달 중력권에서 G = 자동 달 착륙. (예시 설계 「달 탐사 로켓」 추천)',

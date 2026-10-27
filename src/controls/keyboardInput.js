@@ -26,6 +26,7 @@ const HOLD_KEYS = {
   KeyL: 'moveRight',
   KeyI: 'moveDown',
   KeyK: 'moveUp',
+  KeyV: 'brake', // 우주 왕복선: 바퀴 브레이크 + 에어브레이크
 };
 
 // 한 번 누를 때마다 한 번 실행되는 동작 (키 반복 입력은 무시)
@@ -42,6 +43,8 @@ const ACTION_KEYS = {
   KeyU: 'undock', // 정거장에서 분리
   KeyP: 'deployParachute', // 낙하산 펼치기
   KeyC: 'toggleCamera', // 추적 ↔ 1인칭(조종석) 시점
+  KeyY: 'toggleGear', // 우주 왕복선: 착륙 바퀴 내리기/올리기
+  KeyO: 'cycleRunway', // 우주 왕복선: 목표 활주로 바꾸기
   Period: 'warpUp', // 시간 가속 빠르게
   Comma: 'warpDown', // 시간 가속 느리게
 };
@@ -121,6 +124,7 @@ export function createKeyboardInput({ onAction, target = window, isEnabled = () 
         yaw: axis('yawRight', 'yawLeft'),
         roll: axis('rollRight', 'rollLeft'),
         translate: [axis('moveRight', 'moveLeft'), axis('moveForward', 'moveBack'), axis('moveUp', 'moveDown')],
+        brake: held.has('brake'),
       };
     },
     releaseAll,

@@ -7,6 +7,7 @@
  */
 import * as THREE from 'three';
 import { createSkyDome } from './skyDome.js';
+import { createSunGlare } from './sunGlare.js';
 
 // 태양 방향 (월드, 시각 효과). 발사장에서 남동쪽 높이 약 50°
 export const SUN_DIRECTION = new THREE.Vector3(0.6, 0.8, 0.35).normalize();
@@ -42,6 +43,10 @@ export function createSceneSetup(container) {
   // 하늘 (그라데이션·태양·별)
   const sky = createSkyDome(SUN_DIRECTION.toArray());
   scene.add(sky.group);
+  // 태양 빛무리·빛줄기·렌즈 반사
+  const sunGlare = createSunGlare();
+  scene.add(sunGlare.group);
+  let spaceFactor = 0;
 
   // 태양광(방향광, 그림자) + 하늘/지면 반사광
   const sun = new THREE.DirectionalLight(0xfff4e0, 3.0);
@@ -83,6 +88,7 @@ export function createSceneSetup(container) {
   function updateEnvironment(up, altitude, world, surfaceAltitude = altitude) {
     sky.update(camera.position, up, altitude, world.planetRadius, world.atmosphereTop);
     const air = Math.max(0, 1 - altitude / (world.atmosphereTop * 0.45)); // 1 = 지상, 0 = 우주
+    spaceFactor = 1 - air;
     scene.fog.density = HAZE_DENSITY_GROUND * air * air;
     hemi.intensity = 0.25 + 0.65 * air; // 우주에서는 하늘 반사광이 거의 없다
 
@@ -123,5 +129,14 @@ export function createSceneSetup(container) {
     if (moonUp) moonFill.position.set(moonUp[0], moonUp[1], moonUp[2]);
   }
 
-  return { renderer, scene, camera, updateEnvironment, updatePlanetLight, updateMoonFill, registerCamera };
+  /**
+   * 태양 빛무리 갱신 (렌더 직전)
+   * @param {{center:THREE.Vector3, radius:number}[]} occluders 태양을 가릴 수 있는 천체 (화면 좌표)
+   * @param {boolean} flares 렌즈 반사 (조종석 안에서는 끈다)
+   */
+  function updateSunGlare(occluders, flares) {
+    sunGlare.update(camera, SUN_DIRECTION, occluders, spaceFactor, flares);
+  }
+
+  return { renderer, scene, camera, updateEnvironment, updatePlanetLight, updateMoonFill, registerCamera, updateSunGlare };
 }

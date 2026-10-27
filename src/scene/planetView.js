@@ -13,10 +13,12 @@ import { localFrame } from '../physics/referenceFrame.js';
 import { vec3 } from '../physics/vectorMath.js';
 import { toRenderPosition, toRenderLength } from './renderCoordinates.js';
 import { planetColorAt } from './planetSurface.js';
-import { createPlanetTexture, createGroundDetailTexture, GLOBE_ROTATION_X } from './proceduralTextures.js';
+import { createPlanetMaps, createGroundDetailTexture, GLOBE_ROTATION_X } from './proceduralTextures.js';
+import { nightOnly, addSurfaceDetail } from './sunShading.js';
 import { fbm3 } from './noise.js';
 import { createCloudLayer } from './cloudLayer.js';
 import { createAtmosphereGlow } from './atmosphereGlow.js';
+import { runwayList, runwayFrame } from '../landing/runway.js';
 
 // 화면 품질용 값 (물리와 무관)
 const GLOBE_SEGMENTS = 128;
@@ -26,6 +28,7 @@ const CAP_SEGMENTS = 256;
 const LOCAL_PATCH_ANGLE = 0.02; // 착륙 지점 조각 범위 (rad, 지표 약 12 km)
 const LOCAL_PATCH_RINGS = 96;
 const LOCAL_PATCH_SEGMENTS = 128;
+const RUNWAY_PATCH_ANGLE = 0.03; // 먼 활주로 둘레 조각 범위 (rad, 지표 약 18 km)
 const PATCH_HIDE_ALTITUDE = 40_000; // 이 고도(m) 위에서는 고해상도 조각 대신 행성 구만 보인다
 const DETAIL_TILE = 40; // 지면 근접 무늬 한 장이 덮는 크기 (m)
 
@@ -39,10 +42,21 @@ export function createPlanetView(config, modelLibrary = null) {
   // 저해상도 구의 면이 실제 지표보다 위로 튀어나오지 않도록 아주 조금 작게 그린다.
   // 구의 극(±Y)을 실제 북극(−Z)에 맞춰 돌려, 발사장(+Y)이 텍스처가 찌그러지는 극에 놓이지 않게 한다.
   const globeRadius = toRenderLength(radius) * Math.cos(Math.PI / GLOBE_SEGMENTS);
-  const globe = new THREE.Mesh(
-    new THREE.SphereGeometry(globeRadius, GLOBE_SEGMENTS, GLOBE_SEGMENTS / 2),
-    new THREE.MeshStandardMaterial({ map: createPlanetTexture(siteDirection, northPoleDirection), roughness: 0.95 }),
-  );
+  // 표면 색 + 지형 굴곡(bump) + 거칠기(바다는 매끈해 햇빛이 반짝인다) + 밤쪽 도시 불빛
+  const maps = createPlanetMaps(siteDirection, northPoleDirection);
+  const globeMaterial = nightOnly(new THREE.MeshStandardMaterial({
+    map: maps.color,
+    bumpMap: maps.surface,
+    bumpScale: 3,
+    roughnessMap: maps.surface,
+    roughness: 1,
+    metalness: 0,
+    emissiveMap: maps.lights,
+    emissive: 0xffffff,
+    emissiveIntensity: 1.4,
+  }));
+  addSurfaceDetail(globeMaterial, createGroundDetailTexture());
+  const globe = new THREE.Mesh(new THREE.SphereGeometry(globeRadius, GLOBE_SEGMENTS, GLOBE_SEGMENTS / 2), globeMaterial);
   globe.rotation.x = GLOBE_ROTATION_X;
   globe.receiveShadow = true;
   group.add(globe);
@@ -56,7 +70,11 @@ export function createPlanetView(config, modelLibrary = null) {
 
   // ── 3) 구름층·대기 빛 ─────────────────────────────────
   const clouds = createCloudLayer(radius);
-  const glow = createAtmosphereGlow(toRenderLength(radius + config.atmosphere.topAltitude));
+  // 대기 빛: 대기 상한까지의 구, 지표 위 약 9 km 마다 옅어진다 (화면 효과용 높이)
+  const glow = createAtmosphereGlow(toRenderLength(radius + config.atmosphere.topAltitude), toRenderLength(radius + 4_000), {
+    planetRadius: toRenderLength(radius),
+    scaleHeight: toRenderLength(9_000),
+  });
   group.add(clouds.mesh, glow.mesh);
 
   // ── 2) 고해상도 지표 조각 (발사장, 이후 착륙 지점) ──────
@@ -76,6 +94,13 @@ export function createPlanetView(config, modelLibrary = null) {
     return mesh;
   }
   addSurfacePatch(siteDirection, CAP_ANGLE, CAP_RINGS, CAP_SEGMENTS);
+  // 멀리 있는 우주 왕복선 활주로 둘레 (발사장 조각 밖에 있는 것만)
+  if (config.runway) {
+    for (const r of runwayList(config)) {
+      const up = runwayFrame(config, r).up;
+      if (Math.acos(Math.min(1, vec3.dot(up, siteDirection))) > CAP_ANGLE * 0.8) addSurfacePatch(up, RUNWAY_PATCH_ANGLE, LOCAL_PATCH_RINGS, LOCAL_PATCH_SEGMENTS);
+    }
+  }
   const basePatchCount = patches.length;
 
   return {
@@ -136,7 +161,8 @@ function paintPatch(geometry, frame, radius, siteDir, northDir) {
     const dir = vec3.normalize(p);
     const { color, water } = planetColorAt(dir, siteDir, northDir);
     // 수 km 크기의 들판·숲 얼룩 (육지만)
-    const patchNoise = water ? 1 : 0.75 + 0.5 * fbm3(dir[0] * 900, dir[1] * 900, dir[2] * 900, 4);
+    // 가까이서 보는 땅은 우주에서 본 색보다 밝게 (멀리서는 대기가 어둡게·푸르게 덮어 보인다)
+    const patchNoise = (water ? 1 : 0.75 + 0.5 * fbm3(dir[0] * 900, dir[1] * 900, dir[2] * 900, 4)) * (water ? 1.2 : 1.7);
     colors[i * 3] = color[0] * patchNoise;
     colors[i * 3 + 1] = color[1] * patchNoise;
     colors[i * 3 + 2] = color[2] * patchNoise;

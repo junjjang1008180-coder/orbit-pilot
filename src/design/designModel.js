@@ -106,9 +106,19 @@ export function analyzeDesign(stack, config) {
   const totalFuel = stageInfo.reduce((s, st) => s + st.fuel, 0);
   // 발사 TWR: 발사대 상판 높이의 실제 중력으로 계산 (비행 화면 TWR 과 같은 방식)
   const padGravity = gravityMagnitudeAtRadius(config.planet.radius + config.launchSite.padHeight, config.planet.mu);
-  const launchTwr = stageInfo.length ? stageInfo[0].thrust / (totalMass * padGravity) : 0;
+  // 발사 때 함께 점화되는 위 단(우주 왕복선 주 엔진)의 추력도 더한다
+  let launchThrust = stageInfo.length ? stageInfo[0].thrust : 0;
+  for (let i = 1; i < rocket.stages.length && rocket.stages[i].ignitesWithStageBelow; i++) launchThrust += rocket.stages[i].maxThrust;
+  const launchTwr = stageInfo.length ? launchThrust / (totalMass * padGravity) : 0;
 
-  if (!stack.some((id) => parts[id]?.kind === 'payload')) {
+  // 우주 왕복선 부품은 예시 설계 그대로만 (부품을 섞거나 순서를 바꾸면 모델·분리가 맞지 않는다)
+  const usesShuttleParts = stack.some((id) => parts[id]?.shuttle);
+  const shuttlePresets = Object.values(config.testRockets ?? {}).filter((d) => d.stages.some((s) => s.parts.some((id) => parts[id]?.shuttle)));
+  if (usesShuttleParts && !shuttlePresets.some((d) => d.stages.flatMap((s) => s.parts).join() === stack.join())) {
+    errors.push('우주 왕복선 부품은 예시 설계 「우주 왕복선」 그대로만 쓸 수 있어요. 예시 설계를 다시 불러오세요.');
+  }
+
+  if (!stack.some((id) => parts[id]?.kind === 'payload' || parts[id]?.kind === 'orbiter')) {
     errors.push('탑재물이 없습니다. 탑재물(캡슐 등)을 하나 이상 올리세요.');
   }
   if (stageInfo.length && !stageInfo[0].hasEngine) {
@@ -118,8 +128,9 @@ export function analyzeDesign(stack, config) {
   }
   stageInfo.forEach((st) => {
     const label = `${st.index + 1}단`;
-    if (st.hasEngine && st.fuel === 0) warnings.push(`${label}: 엔진은 있지만 연료가 없습니다 (Δv 0).`);
-    if (!st.hasEngine && st.fuel > 0) warnings.push(`${label}: 연료가 있지만 엔진이 없어 쓸 수 없습니다.`);
+    const parallel = rocket.stages[st.index + 1]?.ignitesWithStageBelow;
+    if (st.hasEngine && st.fuel === 0 && !rocket.stages[st.index].ignitesWithStageBelow) warnings.push(`${label}: 엔진은 있지만 연료가 없습니다 (Δv 0).`);
+    if (!st.hasEngine && st.fuel > 0 && !parallel) warnings.push(`${label}: 연료가 있지만 엔진이 없어 쓸 수 없습니다.`);
     const isRecovery = st.parts.some((id) => parts[id]?.kind === 'parachute' || parts[id]?.kind === 'heatShield');
     if (st.index > 0 && !st.hasEngine && st.index === stageInfo.length - 1 && stageInfo.length > 1 && !isRecovery) {
       warnings.push(`${label}: 엔진이 없는 맨 위 단입니다.`);
@@ -133,7 +144,7 @@ export function analyzeDesign(stack, config) {
       warnings.push('열 차폐막은 자기 단의 맨 아래에 있어야 재진입 열을 막아요.');
     }
   }
-  if (stack.some((id) => parts[id]?.kind === 'parachute') && shieldIndex < 0) {
+  if (stack.some((id) => parts[id]?.kind === 'parachute') && shieldIndex < 0 && !stack.some((id) => parts[id]?.winged)) {
     warnings.push('낙하산은 있지만 열 차폐막이 없어요 — 궤도에서 돌아올 때 탈 수 있어요.');
   }
 

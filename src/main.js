@@ -17,7 +17,9 @@ import { FlightSimulation } from './core/simulation.js';
 import { currentThrust, maxThrust } from './physics/flightPhysics.js';
 import { airDensity } from './physics/aerodynamics.js';
 import { vec3 } from './physics/vectorMath.js';
-import { createSceneSetup } from './scene/sceneSetup.js';
+import { moonState } from './physics/celestialBodies.js';
+import { createSceneSetup, SUN_DIRECTION } from './scene/sceneSetup.js';
+import { updateSunView } from './scene/sunShading.js';
 import { createPlanetView } from './scene/planetView.js';
 import { createMoonView } from './scene/moonView.js';
 import { createLaunchPadView } from './scene/launchPadView.js';
@@ -26,6 +28,7 @@ import { createEnvironmentMap } from './scene/environmentMap.js';
 import { toRenderPosition, toRenderQuaternion } from './scene/renderCoordinates.js';
 import { createMapView } from './scene/mapView.js';
 import { createRocketView } from './rocket/rocketView.js';
+import { createShuttleView } from './rocket/shuttleView.js';
 import { createDebrisViews } from './rocket/debrisView.js';
 import { createChaseCamera } from './camera/chaseCamera.js';
 import { createMapCamera } from './camera/mapCamera.js';
@@ -47,6 +50,9 @@ import { createManeuverPanel } from './ui/maneuverPanel.js';
 import { createParachuteView } from './effects/parachuteView.js';
 import { createReentryGlow } from './effects/reentryGlow.js';
 import { createCockpitView } from './scene/cockpitView.js';
+import { createShuttleCockpitView } from './scene/shuttleCockpit.js';
+import { createRunwayView } from './landing/runwayView.js';
+import { runwayList } from './landing/runway.js';
 
 const config = PHYSICS_CONFIG;
 
@@ -63,7 +69,11 @@ let lastMissionStatus = 'active';
 
 // ── 3D 장면 ───────────────────────────────────────────────
 const viewportElement = document.getElementById('viewport');
-const { renderer, scene, camera, updateEnvironment, updatePlanetLight, updateMoonFill, registerCamera } = createSceneSetup(viewportElement);
+const { renderer, scene, camera, updateEnvironment, updatePlanetLight, updateMoonFill, registerCamera, updateSunGlare } = createSceneSetup(viewportElement);
+const sunOccluders = [
+  { center: new THREE.Vector3(), radius: config.planet.radius },
+  { center: new THREE.Vector3(), radius: config.moon?.radius ?? 0 },
+];
 const planetView = createPlanetView(config, modelLibrary);
 const moonView = createMoonView(config);
 const launchPadView = createLaunchPadView(config, modelLibrary);
@@ -75,7 +85,10 @@ const debrisViews = createDebrisViews(scene, config);
 const explosions = createExplosionEffects(scene);
 const landingZoneView = createLandingZoneView(scene, config, planetView, modelLibrary);
 const reentryGlow = createReentryGlow(scene);
-const cockpitView = createCockpitView(scene); // 1인칭 조종석 실내
+const cockpitView = createCockpitView(scene); // 1인칭 조종석 실내 (캡슐)
+const shuttleCockpitView = createShuttleCockpitView(scene); // 1인칭 조종석 실내 (우주 왕복선 비행 갑판)
+const runwayViews = runwayList(config).map((r) => createRunwayView(config, r)); // 우주 왕복선 착륙 활주로들
+for (const v of runwayViews) scene.add(v.group);
 const parachuteView = createParachuteView();
 
 let rocketView;
@@ -89,7 +102,10 @@ function rebuildRocketView() {
   debrisViews.clear();
   explosions.clear();
   landingZoneView.clear();
-  rocketView = createRocketView(simulation.rocket, modelLibrary, { envMap: rocketEnvMap });
+  rocketView = simulation.rocket.isShuttle
+    ? createShuttleView(simulation.rocket, config, { envMap: rocketEnvMap })
+    : createRocketView(simulation.rocket, modelLibrary, { envMap: rocketEnvMap });
+  launchPadView.setShuttle(simulation.rocket.isShuttle); // 왕복선이면 빨간 철골 발사탑
   rocketView.group.add(parachuteView.group); // 펼친 낙하산은 로켓 꼭대기에 매단다
   rocketView.group.traverse((o) => {
     if (o.isMesh) o.castShadow = o.receiveShadow = true; // 발사대·지면에 그림자
@@ -250,7 +266,7 @@ const designScreen = createDesignScreen(document.getElementById('design-screen')
     landingZoneView.setRadius(simulation.config.landing.landingZoneRadius);
     // 도킹 미션이면 우주 정거장을 띄운다
     const mission = MISSION_CONFIG.missions[missionId];
-    simulation.setScenario({ station: Boolean(mission.spawnsStation), boosterRecovery: Boolean(mission.usesLanding) });
+    simulation.setScenario({ station: Boolean(mission.spawnsStation), boosterRecovery: Boolean(mission.usesLanding), glideStart: Boolean(mission.startsGliding) });
     simulation.loadRocket(definition); // 설계한 부품·질량·연료·단 구성이 그대로 비행에 쓰인다
     startFlight();
   },
@@ -356,6 +372,7 @@ function frame(now) {
   const reference = simulation.getReference(controlled); // 기준 천체 (행성 또는 달)
   launchPadView.update(origin);
   scenery.update(origin);
+  for (const v of runwayViews) v.update(origin, now / 1000);
   debrisViews.sync(simulation.debris, rocketView, origin, now / 1000);
   landingZoneView.update(simulation.booster?.landingZone ?? null, origin);
   stationView.update(simulation.station, origin, now / 1000);
@@ -365,18 +382,26 @@ function frame(now) {
   toRenderPosition(state.position, origin, rocketView.group.position);
   rocketView.group.visible = !state.destroyed; // 파손되면 로켓을 숨긴다
   toRenderQuaternion(state.orientation, rocketView.group.quaternion);
-  ensureRocketFlame(state.currentStage);
-  rocketFlame.update(state.destroyed ? 0 : thrustFraction(state), densityRatio(state), now / 1000);
-  parachuteView.update(state.landed || state.destroyed ? 0 : state.parachuteArea, rocketView.height);
+  if (rocketView.isShuttle) {
+    // 우주 왕복선: 불꽃 7개·바퀴·에어브레이크·감속 낙하산을 모델이 직접 움직인다
+    rocketView.update(state, densityRatio(state), now / 1000, realDt);
+    parachuteView.update(0, rocketView.height);
+  } else {
+    ensureRocketFlame(state.currentStage);
+    rocketFlame.update(state.destroyed ? 0 : thrustFraction(state), densityRatio(state), now / 1000);
+    parachuteView.update(state.landed || state.destroyed ? 0 : state.parachuteArea, rocketView.height);
+  }
   reentryGlow.update(state, origin, now / 1000);
 
   const controlledHeight = controlled === state
     ? rocketView.height
     : rocketView.stageHeights[simulation.booster.stageIndex];
-  chaseCamera.update(controlled, controlledHeight, reference.position);
-  // 1인칭: 조종석 실내를 눈 위치·로켓 자세에 맞춰 두고, 로켓 겉모습은 숨긴다 (눈이 캡슐 안)
+  const shuttleCabin = Boolean(rocketView.isShuttle && controlled === state);
+  chaseCamera.update(controlled, controlledHeight, reference.position, shuttleCabin ? rocketView.cockpitEye(state.currentStage) : null);
+  // 1인칭: 조종석 실내를 눈 위치·로켓 자세에 맞춰 두고, 로켓 겉모습은 숨긴다 (눈이 조종석 안)
   const inCockpit = chaseCamera.getMode() === 'cockpit' && viewMode === 'flight';
-  cockpitView.update(inCockpit, camera.position, controlled, telemetry, now / 1000, realDt);
+  cockpitView.update(inCockpit && !shuttleCabin, camera.position, controlled, telemetry, now / 1000, realDt);
+  shuttleCockpitView.update(inCockpit && shuttleCabin, camera.position, controlled, telemetry, now / 1000, realDt);
   if (inCockpit && controlled === state) rocketView.group.visible = false;
   updateEnvironment(
     vec3.normalize(controlled.position),
@@ -397,7 +422,7 @@ function frame(now) {
   navball.update(
     controlled,
     telemetry,
-    controlled === state ? null : simulation.booster?.landingZone ?? null,
+    controlled === state ? (telemetry.shuttle?.winged ? telemetry.shuttle.threshold : null) : simulation.booster?.landingZone ?? null,
     simulation.getTarget(controlled),
     telemetry.maneuver?.direction ?? null,
     reference,
@@ -424,17 +449,26 @@ function frame(now) {
       { width: viewportElement.clientWidth, height: viewportElement.clientHeight },
       mapCamera.getFocusMode(),
     );
+    updateSunView(mapCameraObject, SUN_DIRECTION);
     renderer.render(mapView.scene, mapCameraObject);
   } else {
+    updateSunView(camera, SUN_DIRECTION);
+    toRenderPosition([0, 0, 0], origin, sunOccluders[0].center);
+    if (config.moon) toRenderPosition(moonState(config, controlled.time).position, origin, sunOccluders[1].center);
+    updateSunGlare(sunOccluders, !inCockpit);
     renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
+document.getElementById('boot')?.remove(); // 준비 끝 — 로딩 화면 치우기
+
 // 브라우저 콘솔·자동 검수용 읽기 창구 (게임 로직에서는 쓰지 않는다)
 window.orbitPilot = {
   simulation,
+  scene,
+  renderer,
   config,
   chaseCamera,
   mapCamera,

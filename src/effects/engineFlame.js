@@ -10,19 +10,22 @@ import * as THREE from 'three';
 const BASE_LENGTH_PER_RADIUS = 7; // 스로틀 100% 일 때 불꽃 길이 = 엔진 반지름 × 이 값
 const FLICKER = 0.08; // 길이 깜빡임 비율
 
-/** @param {number} radius 엔진(단) 반지름 (화면 단위) */
-export function createEngineFlame(radius) {
+/**
+ * @param {number} radius 엔진(단) 반지름 (화면 단위)
+ * @param {{outer?:number, core?:number, lengthScale?:number}} [style] 불꽃 색·길이 (액체 수소 엔진은 푸르스름)
+ */
+export function createEngineFlame(radius, { outer: outerColor = 0xff7a1a, core: coreColor = 0xfff1b0, lengthScale = 1 } = {}) {
   const group = new THREE.Group();
   group.name = 'engine-flame';
 
   // 바깥 불꽃(주황) + 안쪽 코어(밝은 노랑). 원뿔 꼭짓점이 아래(-Y)를 향하게 한다.
   const outer = new THREE.Mesh(
     new THREE.ConeGeometry(1, 1, 24, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xff7a1a, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color: outerColor, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   );
   const core = new THREE.Mesh(
     new THREE.ConeGeometry(1, 1, 16, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xfff1b0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color: coreColor, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   );
   for (const mesh of [outer, core]) {
     mesh.rotation.x = Math.PI; // 꼭짓점을 아래로
@@ -48,7 +51,7 @@ export function createEngineFlame(radius) {
         return;
       }
       const flicker = 1 + FLICKER * Math.sin(time * 53) * Math.sin(time * 31);
-      const length = radius * BASE_LENGTH_PER_RADIUS * (0.35 + 0.65 * throttleFraction) * flicker;
+      const length = radius * BASE_LENGTH_PER_RADIUS * lengthScale * (0.35 + 0.65 * throttleFraction) * flicker;
       const spread = 0.75 + 0.9 * (1 - airDensityRatio); // 진공에 가까울수록 넓게 퍼짐
       outer.scale.set(radius * 0.8 * spread, length, radius * 0.8 * spread);
       outer.position.y = -length / 2;

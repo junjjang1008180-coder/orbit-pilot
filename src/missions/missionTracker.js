@@ -48,7 +48,7 @@ export function createMissionTracker(missionId, configs) {
       } else if (t.aborted) {
         status = 'failed';
         result = { time: t.time, score: null, reason: '비상 중단' };
-      } else if (t.hasLiftedOff && t.landed) {
+      } else if (t.hasLiftedOff && t.landed && !(mission.landsOnRunway && (t.shuttle?.rolling || t.shuttleLanded))) {
         status = 'failed';
         result = { time: t.time, score: null, reason: '목표 달성 전에 지면으로 돌아옴' };
       }

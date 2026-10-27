@@ -22,6 +22,7 @@ import { localFrame } from '../physics/referenceFrame.js';
 import { airDensity } from '../physics/aerodynamics.js';
 import { steerToward, noseOf } from './attitudeController.js';
 import { hasFuel } from '../physics/flightPhysics.js';
+import { shuttleLandingProgram } from './shuttleAutopilot.js';
 
 export const SAS_MODES = ['off', 'hold', 'prograde', 'retrograde'];
 export const SAS_TARGET_MODES = ['target', 'antiTarget', 'relativePrograde', 'relativeRetrograde'];
@@ -45,6 +46,7 @@ export const PROGRAM_LABELS = {
   maneuver: '기동 실행',
   moonLanding: '자동 달 착륙',
   reentry: '자동 재진입·회수',
+  shuttleLanding: '자동 귀환·착륙',
 };
 
 export function createAutopilotState() {
@@ -70,6 +72,7 @@ function copyInput(c, m) {
   c.yaw = m.yaw;
   c.roll = m.roll;
   c.translate = m.translate ? [...m.translate] : [0, 0, 0];
+  c.brake = Boolean(m.brake);
 }
 
 /** 안내 문구 기록 */
@@ -115,6 +118,7 @@ export function stepAutopilot(vehicle, ctx) {
     c.yaw = attitude.yaw;
     c.roll = attitude.roll;
     c.translate = out.translate ? [...out.translate] : [0, 0, 0];
+    c.brake = Boolean(manual.brake); // 브레이크(V)는 자동 비행 중에도 사람이 쓸 수 있다
     return;
   }
 
@@ -190,6 +194,15 @@ function runProgram(vehicle, ctx) {
       return moonLandingProgram(vehicle, ctx);
     case 'reentry':
       return reentryProgram(vehicle, ctx);
+    case 'shuttleLanding':
+      return shuttleLandingProgram(vehicle, {
+        ...ctx,
+        announce: (message) => announce(vehicle, message),
+        stop: (message) => {
+          stopProgram(vehicle, message);
+          vehicle.autopilot.sas = 'off';
+        },
+      });
     default:
       return {};
   }
@@ -331,7 +344,9 @@ function orbitProgram(vehicle, ctx) {
     }
     if (ctx.orbitCircularNow()) {
       setThrottle(vehicle, 0);
-      stopProgram(vehicle, '원궤도 진입 완료! 자세 보조를 진행 방향으로 맞춰 둘게요');
+      // 우주 왕복선: 궤도에 오르면 외부 탱크를 뗀다
+      if (ctx.nextStageWinged) ctx.separateStage();
+      stopProgram(vehicle, ctx.nextStageWinged ? '원궤도 진입 완료! 외부 탱크를 분리했어요' : '원궤도 진입 완료! 자세 보조를 진행 방향으로 맞춰 둘게요');
       vehicle.autopilot.sas = 'prograde';
       return {};
     }

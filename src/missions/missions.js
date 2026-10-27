@@ -117,6 +117,21 @@ export function checkMission(missionId, t, { missions, physics }) {
       }
       return { achieved: false, progress: moonProgress(t) };
     }
+    case 'shuttleOrbit':
+    case 'shuttleGlide': {
+      if (!t.shuttle) return { achieved: false, unsupported: true, progress: '예시 설계 「우주 왕복선」 으로 발사하세요' };
+      const needsOrbit = missionId === 'shuttleOrbit';
+      if (needsOrbit && !t.orbitAchieved) {
+        return { achieved: false, progress: t.landed && !t.hasLiftedOff ? '먼저 궤도에 오르세요 (G = 자동 궤도 진입)' : '궤도에 오르는 중' };
+      }
+      if (t.shuttleLanded && !t.destroyed) return { achieved: true, progress: '활주로 착륙 성공' };
+      const sh = t.shuttle;
+      if (sh.rolling) return { achieved: false, progress: `활주 중 ${t.speed.toFixed(0)} m/s — V 브레이크 · P 감속 낙하산` };
+      return {
+        achieved: false,
+        progress: `활주로까지 ${formatDistance(sh.distanceToThreshold)} · 고도 ${formatDistance(t.altitude)} · 바퀴 ${sh.gearDown ? '내림' : '올림'}`,
+      };
+    }
     default:
       return { achieved: false, progress: '알 수 없는 미션' };
   }

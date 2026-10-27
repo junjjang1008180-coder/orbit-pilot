@@ -36,9 +36,9 @@ const fragmentShader = /* glsl */ `
       ? mix(horizon, zenith, pow(clamp(h, 0.0, 1.0), 0.45))
       : mix(horizon, below, clamp(-h * 5.0, 0.0, 1.0));
 
-    // 우주: 검은 하늘 + 행성 가장자리의 얇은 푸른 대기 띠
-    float limb = exp(-abs(h - uHorizonSin) * 60.0);
-    vec3 space = vec3(0.25, 0.5, 1.0) * limb * 0.6;
+    // 우주: 검은 하늘 + 지평선 바로 위의 아주 얇은 푸른 띠 (행성 둘레 대기 빛은 atmosphereGlow 가 그린다)
+    float limb = exp(-abs(h - uHorizonSin) * 400.0);
+    vec3 space = vec3(0.25, 0.5, 1.0) * limb * 0.25;
     vec3 color = mix(day, space, uSpace);
 
     // 태양: 작은 원반 + 넓은 빛무리 (우주에서는 빛무리가 약해진다)

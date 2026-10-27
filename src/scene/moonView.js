@@ -13,7 +13,7 @@ import { moonState } from '../physics/celestialBodies.js';
 import { toRenderPosition, toRenderLength } from './renderCoordinates.js';
 import { GLOBE_ROTATION_X } from './proceduralTextures.js';
 import { buildCapGeometry } from './planetView.js';
-import { moonColorAt, createMoonTexture, createRegolithTexture } from './moonSurface.js';
+import { moonColorAt, createMoonMaps, createRegolithTexture } from './moonSurface.js';
 
 // 화면 품질용 값 (물리와 무관)
 const GLOBE_SEGMENTS = 160;
@@ -34,7 +34,8 @@ export function createMoonView(config) {
   const globe = new THREE.Mesh(
     new THREE.SphereGeometry(globeRadius, GLOBE_SEGMENTS, GLOBE_SEGMENTS / 2),
     // 지상 안개(대기 원근)를 받으면 낮에는 달이 사라지므로 안개를 끈다
-    new THREE.MeshStandardMaterial({ map: createMoonTexture(), roughness: 1, metalness: 0, fog: false }),
+    // 색 + 높이 지도(충돌구 그릇·테두리·봉우리, 낮은 바다) — 비스듬한 햇빛에 그림자가 진다
+    new THREE.MeshStandardMaterial({ map: createMoonMaps().color, bumpMap: createMoonMaps().bump, bumpScale: 6, roughness: 1, metalness: 0, fog: false }),
   );
   globe.rotation.x = GLOBE_ROTATION_X;
   group.add(globe);

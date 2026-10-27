@@ -12,6 +12,8 @@ import { localFrame } from '../physics/referenceFrame.js';
 import { hasFuel } from '../physics/flightPhysics.js';
 import { attachedParachute } from '../physics/heating.js';
 import { formatDistance } from '../ui/format.js';
+import { runwayFrame, runwayPoint, getRunway } from '../landing/runway.js';
+import { flightAttitude, entryAlpha } from './shuttleAutopilot.js';
 
 const km = (m) => (Number.isFinite(m) ? `${Math.round(m / 1000)} km` : '∞');
 const sec = (s) => `${Math.max(0, Math.round(s))}초`;
@@ -41,6 +43,10 @@ export function computeGuide(sim, t) {
   if (t.destroyed) return { text: '기체가 부서졌어요. 미션 창의 「재시작」으로 다시 해 보세요. (난이도 「쉬움」은 기체가 더 튼튼해요)', direction: null, level: 'warn' };
   if (v.autopilot.program) return { text: `자동 비행 중 — <b>${t.autopilot.programLabel}</b>. 조종 키를 누르면 직접 조종으로 바뀌어요.`, direction: null };
   if (t.docked) return { text: '정거장에 도킹했어요. <kbd>U</kbd> 로 분리할 수 있어요.', direction: null, level: 'success' };
+  if (t.shuttle && t.controlledVehicle !== 'booster') {
+    const guide = shuttleGuide(sim, t, v);
+    if (guide) return guide;
+  }
 
   // 부스터 조종 중
   if (t.controlledVehicle === 'booster') {
@@ -165,4 +171,76 @@ export function computeGuide(sim, t) {
     direction: tilted(frame, 90 - lift, horizontal),
     level: stageEmpty ? 'warn' : 'info',
   };
+}
+
+/** 우주 왕복선 안내: 발사·단 분리, 궤도선 역추진·재진입·활공 접근·플레어·활주 */
+function shuttleGuide(sim, t, v) {
+  const c = sim.config;
+  const sh = t.shuttle;
+  if (sh.landed) return { text: '🛬 활주로에 멈췄어요 — 우주 왕복선 착륙 완료!', direction: null, level: 'success' };
+  if (sh.rolling) {
+    return {
+      text: `활주 중 ${Math.round(t.speed)} m/s: <kbd>V</kbd> 를 누르고 있으면 브레이크 · ${sh.maxDeploySpeed} m/s 아래에서 <kbd>P</kbd> 감속 낙하산 · <kbd>A</kbd>/<kbd>D</kbd> 로 중심선 유지 (${Math.round(Math.abs(sh.runwayCross))} m ${sh.runwayCross > 0 ? '북' : '남'})`,
+      direction: null,
+    };
+  }
+  if (t.landed && !sim.hasLiftedOff) {
+    return {
+      text: '우주 왕복선: <kbd>Z</kbd> 로 고체 부스터와 주 엔진을 함께 점화 → 고도 1 km 부터 <kbd>W</kbd> 로 동쪽(◇)으로 기울여요 → 부스터 연료가 다 타면 <kbd>Space</kbd>(부스터 분리) → 궤도에 오르면 <kbd>Space</kbd>(외부 탱크 분리). 어려우면 <kbd>G</kbd> = 자동 궤도 진입 (외부 탱크도 자동 분리)',
+      direction: vec3.normalize(v.position),
+    };
+  }
+  if (!sh.winged) {
+    // 상승 중에는 일반 상승 안내를 쓰되, 단 분리 시점만 덧붙인다
+    if (sim.orbitAchievedAt !== null && v.currentStage < v.stages.length - 1) {
+      return { text: '궤도에 올랐어요! <kbd>Space</kbd> 로 외부 탱크를 떼어 궤도선만 남기세요. (그다음 <kbd>G</kbd> = 자동 귀환·착륙)', direction: null, level: 'success' };
+    }
+    return null;
+  }
+
+  const frame = localFrame(v.position, c.planet.northPoleDirection);
+  const speed = vec3.length(v.velocity);
+  const retrograde = speed > 1 ? vec3.scale(v.velocity, -1 / speed) : null;
+  const orbit = sim.getOrbit(v);
+  const top = c.atmosphere.topAltitude;
+  const sa = c.shuttle.autopilot;
+  if (t.altitude > top && orbit.periapsisAltitude > top) {
+    return {
+      text: `궤도선: <kbd>G</kbd> = 자동 귀환·착륙 (역추진 시점을 계산해 기다려요 · 목표 ${sh.runwayAuto ? '자동' : sh.runwayName} — <kbd>O</kbd> 로 바꾸기). 직접 하려면 기수를 ◇(역진행)에 두고 궤도 조종 엔진으로 역추진해 근지점을 ${Math.round(sa.deorbitPeriapsisAltitude / 1000)} km 아래로`,
+      direction: retrograde,
+    };
+  }
+  const alphaWanted = entryAlpha(c, speed);
+  const att = speed > 50 ? flightAttitude(v.position, v.velocity, alphaWanted, 0) : null;
+  if (t.altitude > sa.interfaceAltitude) {
+    const alphaNow = sh.alphaDeg;
+    const a = Math.round((alphaWanted * 180) / Math.PI);
+    const alphaText = Math.abs(alphaNow - a) > 5 ? `${alphaNow < a ? '<kbd>S</kbd> 로 기수를 들어' : '<kbd>W</kbd> 로 기수를 내려'} 받음각 ${a}° (지금 ${Math.round(alphaNow)}°)` : `받음각 ${a}° 좋아요`;
+    return {
+      text: `재진입: 배 쪽 검은 타일로 열을 받아요 — ${alphaText}. 활주로까지 ${formatDistance(sh.distanceToThreshold)} · 남은 거리가 짧으면 <kbd>Q</kbd>/<kbd>E</kbd> 로 날개를 기울여(뱅크) 빨리 내려가요`,
+      direction: att?.nose ?? null,
+      level: Number.isFinite(t.thermalLimit) && t.skinTemperature > 0.8 * t.thermalLimit ? 'warn' : 'info',
+    };
+  }
+  // 활공 접근: 겨냥점(활주로 시작점 조금 지나서) 쪽으로
+  const runway = getRunway(c, sh.runwayId);
+  const f = runwayFrame(c, runway);
+  const aim = runwayPoint(c, -f.halfLength + sa.aimPointPastThreshold, 0, 0, runway);
+  const toAim = vec3.sub(aim, v.position);
+  const parts = [];
+  let level = 'info';
+  if (t.altitude < sa.preflareAltitude * 1.1) {
+    parts.push(`플레어: <kbd>S</kbd> 로 기수를 천천히 들어 하강을 ${c.shuttle.touchdown.maxVerticalSpeed} m/s 아래로 (지금 ${Math.max(0, -t.verticalSpeed).toFixed(1)} m/s)`);
+  } else {
+    const gs = sh.glideSlopeDeg;
+    if (gs > sa.glideSlopeDeg + 3) parts.push(`높아요 (활공각 ${gs.toFixed(0)}°) → <kbd>W</kbd> 로 기수를 내리고 <kbd>V</kbd> 에어브레이크`);
+    else if (gs < sa.glideSlopeDeg - 3) parts.push(`낮아요 (활공각 ${gs.toFixed(0)}°) → 받음각 10~12° 로 멀리 활공 (에어브레이크 접기)`);
+    else parts.push(`활공각 ${gs.toFixed(0)}° 좋아요 — 그대로 ◇(겨냥점) 쪽으로`);
+  }
+  if (Math.abs(sh.runwayCross) > 60) parts.push(`중심선 ${Math.round(Math.abs(sh.runwayCross))} m ${sh.runwayCross > 0 ? '북쪽 → <kbd>E</kbd> 로 오른쪽' : '남쪽 → <kbd>Q</kbd> 로 왼쪽'}으로 기울여요`);
+  if (!sh.gearDown && t.altitude < 1_000) {
+    parts.push('⚠ <kbd>Y</kbd> 로 착륙 바퀴를 내리세요!');
+    level = 'warn';
+  }
+  return { text: `활공 접근: ${parts.join(' · ')}. 어려우면 <kbd>G</kbd> = 자동 착륙`, direction: toAim, level };
 }

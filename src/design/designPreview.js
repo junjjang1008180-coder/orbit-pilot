@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { buildRocket } from '../rocket/rocketDefinition.js';
 import { createRocketView } from '../rocket/rocketView.js';
+import { createShuttleView } from '../rocket/shuttleView.js';
 import { createEnvironmentMap } from '../scene/environmentMap.js';
 
 const ROTATE_SPEED = 0.008; // rad / px
@@ -18,7 +19,7 @@ const CLICK_MOVE_LIMIT = 4; // 이 픽셀 이하로 움직이면 드래그가 �
  * @param {HTMLElement} container
  * @param {{ onPickPart: (stackIndex:number) => void, modelLibrary?: object }} options
  */
-export function createDesignPreview(container, { onPickPart, modelLibrary = null }) {
+export function createDesignPreview(container, { onPickPart, modelLibrary = null, physicsConfig = null }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -125,7 +126,10 @@ export function createDesignPreview(container, { onPickPart, modelLibrary = null
       partIndexMap = [];
       height = 1;
       if (!definition || definition.stages.length === 0) return;
-      rocketView = createRocketView(buildRocket(definition, partsCatalog), modelLibrary, { envMap });
+      const rocket = buildRocket(definition, partsCatalog);
+      rocketView = rocket.isShuttle && physicsConfig
+        ? createShuttleView(rocket, physicsConfig, { envMap })
+        : createRocketView(rocket, modelLibrary, { envMap });
       scene.add(rocketView.group);
       height = Math.max(1, rocketView.height);
       let index = 0;

@@ -47,7 +47,8 @@ export function computeWarnings(t, config) {
 
   // 자세 불안정: 공기가 있는 곳에서 기수가 진행 방향과 크게 어긋남
   // (열 차폐막을 앞세운 재진입과 낙하산에 매달린 하강은 일부러 뒤로 가는 자세라 제외)
-  const intentionallyBackward = t.heatShielded || t.parachute?.state === 'deployed';
+  // (궤도선은 날개로 받음각을 크게 두고 나는 것이 정상)
+  const intentionallyBackward = t.heatShielded || t.parachute?.state === 'deployed' || t.winged;
   if (!intentionallyBackward && t.dynamicPressure >= w.unstableMinDynamicPressure && t.angleOfAttackDeg > w.unstableAngleOfAttackDeg) {
     list.push({
       id: 'unstable',

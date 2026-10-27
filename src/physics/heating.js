@@ -11,7 +11,7 @@
  *   P 로 펼치면 먼저 보조 낙하산 면적, 다 펼침 고도 아래에서 전체 면적으로 openingTime 동안 늘어난다.
  *   항력 D = ½ρv²·Cd·A 를 기체 항력에 더한다. 너무 빠르거나 동압이 크면 펼치는 순간 찢어진다.
  */
-import { vec3 } from './vectorMath.js';
+import { vec3, quat } from './vectorMath.js';
 
 const STEFAN_BOLTZMANN = 5.670374419e-8; // σ (W/m²·K⁴)
 
@@ -40,9 +40,16 @@ export function stepSkinTemperature(temperature, flux, dt, heatingConfig) {
  * @param {number[]} airVelocity 공기에 대한 속도 (m/s)
  * @returns {{limit:number, shielded:boolean}}
  */
-export function thermalLimit(state, nose, airVelocity, heatingConfig) {
+export function thermalLimit(state, nose, airVelocity, heatingConfig, shuttleConfig = null) {
   const attached = state.stages.slice(state.currentStage);
   const weakest = Math.min(Infinity, ...attached.map((s) => s.maxTemperature ?? Infinity));
+  // 궤도선: 받음각이 크면(배가 공기를 맞으면) 배 쪽 열 차폐 타일이 버틴다
+  if (attached[0]?.winged && shuttleConfig && vec3.length(airVelocity) > 1) {
+    const b = quat.rotate(quat.conjugate(state.orientation), airVelocity);
+    const alphaDeg = (Math.atan2(-b[2], b[1]) * 180) / Math.PI;
+    if (alphaDeg >= shuttleConfig.tileAngleMinDeg && alphaDeg <= shuttleConfig.tileAngleMaxDeg) return { limit: shuttleConfig.tileMaxTemperature, shielded: true };
+    return { limit: weakest, shielded: false };
+  }
   const shield = attached[0]?.bottomShieldTemperature ?? 0;
   const speed = vec3.length(airVelocity);
   if (shield > 0 && speed > 1) {

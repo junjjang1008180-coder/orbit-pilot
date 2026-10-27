@@ -35,13 +35,13 @@ export function targetAngularVelocity(input, controlsConfig) {
  * 회전 속도와 자세를 dt 만큼 갱신한다 (state 를 직접 바꾼다).
  * 지면에 서 있는 동안에는 회전하지 않는다.
  */
-export function stepAttitude(state, controlsConfig, dt) {
+export function stepAttitude(state, controlsConfig, dt, rateScale = 1) {
   if (state.landed) {
     state.angularVelocity = [0, 0, 0];
     return;
   }
   const input = state.aborted ? { pitch: 0, yaw: 0, roll: 0 } : state.controls;
-  const target = targetAngularVelocity(input, controlsConfig);
+  const target = vec3.scale(targetAngularVelocity(input, controlsConfig), rateScale);
   // 1차 지연: ω ← ω + (목표 − ω)·(1 − e^(−k·dt))
   const blend = 1 - Math.exp(-controlsConfig.attitudeResponse * dt);
   state.angularVelocity = vec3.addScaled(

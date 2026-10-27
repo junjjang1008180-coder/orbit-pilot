@@ -45,6 +45,10 @@ export function createRocketState(config, rocket) {
       maxTemperature: stage.maxTemperature, // 단 부품이 버티는 최고 온도 (K)
       parachuteArea: stage.parachuteArea, // 낙하산 다 펼친 면적 합 (m²)
       parachuteSemiArea: stage.parachuteSemiArea, // 보조 낙하산 면적 합 (m²)
+      parachuteMaxDeploySpeed: stage.parachuteMaxDeploySpeed, // 낙하산을 펼칠 수 있는 최대 속도 (m/s)
+      sideMounted: stage.sideMounted, // 옆에 붙은 단 (우주 왕복선)
+      ignitesWithStageBelow: stage.ignitesWithStageBelow, // 아래 단과 함께 점화 (주 엔진)
+      winged: stage.winged, // 날개 달린 궤도선
     })),
     angularVelocity: [0, 0, 0], // 로컬 축 기준 회전 속도 (rad/s)
     currentStage: 0, // 현재 점화 대상 단 (0 = 맨 아래)
@@ -67,6 +71,11 @@ export function createRocketState(config, rocket) {
     destroyedReason: '', // 파손 원인 설명
     touchdown: null, // 마지막 착지 판정 결과 (속도·기울기·안전 여부)
     properAcceleration: planet.surfaceGravity, // 몸으로 느끼는 가속도 (m/s²) — 발사대 위에서는 1 g
+    // 우주 왕복선 궤도선
+    gearDown: false, // 착륙 바퀴를 내렸는지 (Y)
+    brakes: false, // 바퀴 브레이크 / 공중에서는 에어브레이크 (V 를 누르는 동안)
+    speedbrake: 0, // 에어브레이크 펼침 (0~1, 자동 착륙이 조절)
+    rolling: false, // 바퀴로 활주로를 달리는 중
     ...thermalAndParachuteState(config),
   };
 }
@@ -117,6 +126,10 @@ export function createSeparatedVehicle(parent, stage, motion) {
     destroyedReason: '',
     touchdown: null,
     properAcceleration: parent.properAcceleration ?? 0,
+    gearDown: false,
+    brakes: false,
+    speedbrake: 0,
+    rolling: false,
     skinTemperature: parent.skinTemperature,
     heatFlux: 0,
     heatShielded: false,
@@ -132,5 +145,5 @@ export function createSeparatedVehicle(parent, stage, motion) {
  * translate: RCS 평행이동 [로컬 X(오른쪽), 로컬 Y(앞=기수), 로컬 Z(등쪽)] 각 −1~1
  */
 export function idleInput() {
-  return { throttleUp: false, throttleDown: false, pitch: 0, yaw: 0, roll: 0, translate: [0, 0, 0] };
+  return { throttleUp: false, throttleDown: false, pitch: 0, yaw: 0, roll: 0, translate: [0, 0, 0], brake: false };
 }

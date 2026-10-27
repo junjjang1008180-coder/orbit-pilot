@@ -471,6 +471,7 @@ body[data-app="design"] #map-labels { display: none; }
 .design-part-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .map-label-zone { color: #ffd43b; }
+.map-label-runway { color: #5fd6ff; }
 
 .hud-left-stack { position: absolute; left: 12px; top: 150px; width: 270px; display: grid; gap: 8px; }
 .hud-left-stack .hud-box { position: static; }
@@ -698,3 +699,11 @@ body[data-view="map"] .hud-warnings { top: 140px; }
 body[data-view="map"] .cockpit-frame { display: none; }
 /* 1인칭에서는 조종석 계기판이 있으니 아래 다이얼 계기를 숨긴다 */
 body[data-camera="cockpit"] .hud-gauges { display: none; }
+.hud-shuttle { border-color: #5fd6ff; }
+.hud-shuttle .hud-landing-title { color: #5fd6ff; }
+.map-label-runway[data-target="true"] { font-weight: 700; text-decoration: underline; }
+/* 시작 로딩 화면 */
+.boot { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: radial-gradient(circle at 50% 40%, #13213a, #04060b 70%); color: #dfe8f5; font-family: system-ui, sans-serif; }
+.boot b { font-size: 34px; letter-spacing: 0.2em; }
+.boot span { font-size: 15px; opacity: 0.8; animation: boot-pulse 1.4s ease-in-out infinite; }
+@keyframes boot-pulse { 50% { opacity: 0.35; } }

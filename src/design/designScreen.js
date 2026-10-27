@@ -121,6 +121,14 @@ export function createDesignScreen(root, options) {
   missionSelect.addEventListener('change', () => {
     missionId = missionSelect.value;
     renderMissionDesc();
+    // 우주 왕복선 미션을 고르면 왕복선 예시 설계를 불러온다
+    const shuttlePreset = Object.keys(options.presets).find((id) => options.presets[id].stages.some((s) => s.parts.some((p) => parts[p]?.winged)));
+    if (missionConfig.missions[missionId].requiresShuttle && shuttlePreset && !stack.some((id) => parts[id]?.winged)) {
+      stack = stackFromDefinition(options.presets[shuttlePreset]);
+      presetSelect.value = shuttlePreset;
+      selected = null;
+    }
+    update();
   });
   function renderMissionDesc() {
     $('mission-desc').textContent = `🎯 ${missionConfig.missions[missionId].description}`;
@@ -230,7 +238,7 @@ export function createDesignScreen(root, options) {
   // ── 부품 목록 (드래그 시작점) ─────────────────────────────
   const palette = $('palette');
   for (const kind of KIND_ORDER) {
-    const ids = Object.keys(parts).filter((id) => parts[id].kind === kind);
+    const ids = Object.keys(parts).filter((id) => parts[id].kind === kind && !parts[id].hidden); // 우주 왕복선 전용 부품은 예시 설계로만
     if (!ids.length) continue;
     const group = document.createElement('div');
     group.className = 'design-palette-group';
@@ -456,6 +464,7 @@ export function createDesignScreen(root, options) {
   // ── 3D 미리보기 ──────────────────────────────────────────
   const preview = createDesignPreview($('preview'), {
     modelLibrary: options.modelLibrary,
+    physicsConfig,
     onPickPart: (index) => {
       if (index >= 0) select({ source: 'stack', partId: stack[index], index });
     },
@@ -464,6 +473,10 @@ export function createDesignScreen(root, options) {
   function update() {
     store.saveLast(stack); // 새로고침해도 이어서 작업할 수 있게
     analysis = analyzeDesign(stack, physicsConfig);
+    if (missionConfig.missions[missionId]?.requiresShuttle && !stack.some((id) => parts[id]?.winged)) {
+      analysis.errors.push('이 미션은 예시 설계 「우주 왕복선」 으로만 할 수 있어요.');
+      analysis.valid = false;
+    }
     renderStack();
     renderPartInfo();
     renderStats();
@@ -499,6 +512,7 @@ export function createDesignScreen(root, options) {
       missionId = id;
       missionSelect.value = id;
       renderMissionDesc();
+      update(); // 미션에 따라 발사 가능 여부가 바뀐다 (왕복선 전용 미션)
     },
     /** 난이도를 고른다 */
     setDifficulty(id) {

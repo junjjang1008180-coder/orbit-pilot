@@ -10,6 +10,7 @@
  *   - 중력: g = μ / r², 행성 중심 방향. 달 중력권 안에서는 달 중심 방향 (celestialBodies.js).
  *   - 항력: D = ½ρv²·Cd·A, 상대 속도 반대 방향. 낙하산을 펼쳤으면 낙하산 항력을 더한다.
  *   - 재진입 가열: 열유속으로 표면 온도를 올리고, 앞면 부품의 한계를 넘으면 파손 (heating.js).
+ *   - 우주 왕복선: 아래 단과 함께 점화되는 단(주 엔진)은 동시에 탄다. 궤도선 단이면 날개 양력·바퀴 착지·활주 (winged.js).
  * 적분 방식: 도약법(leapfrog, 속도 베를레) — 중력은 스텝 처음과 끝에서 반씩 나눠 적용하는
  *           2차 정확도·심플렉틱 방식이라 궤도를 오래 돌아도 오차가 거의 쌓이지 않는다.
  *           추력·항력·RCS 는 스텝 처음에 한 번에 적용한다.
@@ -22,6 +23,7 @@ import { airDensity, dynamicPressure, dragForce, circularArea } from './aerodyna
 import { resolveGroundContact } from './terrain.js';
 import { evaluateTouchdown } from './touchdown.js';
 import { heatFlux, stepSkinTemperature, thermalLimit, stepParachuteArea } from './heating.js';
+import { isWinged, wingedAeroForce, applyYawStability, followFlightPath, evaluateWheelTouchdown, stepRolling } from './winged.js';
 
 /** 로켓 로컬 기수 방향 (+Y) */
 const NOSE_LOCAL = [0, 1, 0];
@@ -35,10 +37,25 @@ export function rocketMass(state) {
   return mass;
 }
 
-/** 현재 점화 대상 단의 최대 추력 (N) */
+/**
+ * 지금 함께 타는 단들: 현재(맨 아래) 단 + 그 위로 "아래 단과 함께 점화" 되는 단들
+ * (우주 왕복선: 고체 부스터 + 외부 탱크 주 엔진. 보통 로켓은 현재 단 하나)
+ */
+export function activeStages(state) {
+  const list = [];
+  for (let i = state.currentStage; i < state.stages.length; i++) {
+    if (i > state.currentStage && !state.stages[i].ignitesWithStageBelow) break;
+    list.push(state.stages[i]);
+  }
+  return list;
+}
+
+/** 지금 낼 수 있는 최대 추력 (N) — 함께 타는 단 중 연료가 있는 단의 합 */
 export function maxThrust(state) {
-  const stage = state.stages[state.currentStage];
-  return stage ? stage.maxThrust : 0;
+  let thrust = 0;
+  for (const st of activeStages(state)) if (st.fuel > 0) thrust += st.maxThrust;
+  // 연료가 다 떨어졌으면 현재 단 엔진 크기 (불꽃·표시용)
+  return thrust > 0 ? thrust : state.stages[state.currentStage]?.maxThrust ?? 0;
 }
 
 /** 현재 단에 연료가 남아 있는지 */
@@ -49,8 +66,10 @@ export function hasFuel(state) {
 
 /** 지금 실제로 내고 있는 추력 (N). 연료가 없거나 파손되면 0. */
 export function currentThrust(state) {
-  if (!state.engineOn || state.destroyed || !hasFuel(state)) return 0;
-  return state.throttle * maxThrust(state);
+  if (!state.engineOn || state.destroyed) return 0;
+  let thrust = 0;
+  for (const st of activeStages(state)) if (st.fuel > 0) thrust += st.maxThrust;
+  return state.throttle * thrust;
 }
 
 /** 로켓 기수가 가리키는 월드 방향 단위벡터 */
@@ -103,10 +122,19 @@ export function stepFlight(state, config, dt) {
     return;
   }
   stepThrottle(state, config.controls, dt);
-  stepAttitude(state, config.controls, dt);
+  const winged = isWinged(state) && config.shuttle;
+  // 궤도선을 직접 조종할 때는 회전을 절반 빠르기로 (활공은 섬세하게) — 자동 비행은 그대로
+  if (!state.rolling) stepAttitude(state, config.controls, dt, winged && !state.autopilot?.program ? 0.5 : 1);
+  const velocityBefore = winged ? vec3.clone(state.velocity) : null;
   // 낙하산: 펼친 면적을 늘리고, 펼친 동안 기체를 낙하산 아래로 매단다 (기수가 진행 반대쪽)
-  const chuteArea = config.parachute && !state.landed ? stepParachuteArea(state, altitude(state, config), dt, config.parachute) : 0;
-  if (chuteArea > 0) hangUnderParachute(state, config.parachute, dt);
+  // (궤도선의 감속 낙하산은 활주로에서 쓰므로 매달리지 않는다)
+  const chuteArea = config.parachute && (!state.landed || state.rolling) ? stepParachuteArea(state, altitude(state, config), dt, config.parachute) : 0;
+  if (chuteArea > 0 && !winged) hangUnderParachute(state, config.parachute, dt);
+  // 에어브레이크: V 를 누르면 펼치고, 아니면 자동 착륙이 정한 값으로
+  if (winged) {
+    const target = state.controls.brake ? 1 : state.speedbrakeCommand ?? 0;
+    state.speedbrake += Math.max(-dt, Math.min(dt, target - state.speedbrake)) * 0.8;
+  }
 
   const nose = noseDirection(state);
   const massBefore = rocketMass(state);
@@ -122,7 +150,13 @@ export function stepFlight(state, config, dt) {
   const density = airDensity(alt, config.atmosphere);
   // 열 차폐막이 앞면이면 뭉툭한 면의 큰 항력 계수를 쓴다
   const bodyCd = state.heatShielded && config.heating ? config.heating.shieldDragCoefficient : config.aerodynamics.dragCoefficient;
-  let drag = dragForce(state.velocity, density, bodyCd, rocketDragArea(state));
+  // 궤도선은 날개 양력 + 항력, 나머지는 항력만
+  const aero = winged ? wingedAeroForce(state, config, density) : null;
+  if (aero) {
+    state.angleOfAttack = aero.alpha;
+    state.sideslip = aero.beta;
+  }
+  let drag = aero ? aero.force : dragForce(state.velocity, density, bodyCd, rocketDragArea(state));
   if (chuteArea > 0) drag = vec3.add(drag, dragForce(state.velocity, density, config.parachute.dragCoefficient, chuteArea));
   const massAvg = massBefore - burn.fuelBurned / 2;
   const t0 = state.time;
@@ -136,6 +170,16 @@ export function stepFlight(state, config, dt) {
 
   // 몸으로 느끼는 가속도(중력 제외: 추력·항력·RCS, 지면 위에서는 지면 반력) — G 계기용 (m/s²)
   state.properAcceleration = vec3.length(vec3.add(vec3.scale(nose, thrustDeltaV / dt), vec3.sub(otherAcceleration, gravityStart)));
+
+  if (state.landed && state.rolling) {
+    // 궤도선이 바퀴로 활주로를 달리는 중
+    state.dynamicPressure = dynamicPressure(density, vec3.length(state.velocity));
+    const reason = stepRolling(state, config, dt, thrustDeltaV / dt, drag, massAvg);
+    state.properAcceleration = config.planet.surfaceGravity;
+    state.time += dt;
+    if (reason) destroy(state, reason);
+    return;
+  }
 
   if (state.landed) {
     // 지면에 서 있을 때는 지면 반력이 아래로 누르는 힘을 받쳐 준다.
@@ -172,13 +216,18 @@ export function stepFlight(state, config, dt) {
   state.position = vec3.addScaled(state.position, velocityHalf, dt);
   state.velocity = vec3.addScaled(velocityHalf, gravityAt(state.position, t0 + dt, config), dt / 2);
   state.time += dt;
+  if (winged) {
+    followFlightPath(state, velocityBefore, state.dynamicPressure ?? 0);
+    applyYawStability(state, config, state.dynamicPressure ?? 0, dt);
+  }
 
   // ── 4) 동압과 Max-Q 파손 판정 ───────────────────────────
   const densityAfter = airDensity(altitude(state, config), config.atmosphere);
   state.dynamicPressure = dynamicPressure(densityAfter, vec3.length(state.velocity));
   state.maxDynamicPressureSeen = Math.max(state.maxDynamicPressureSeen, state.dynamicPressure);
-  if (state.dynamicPressure > config.aerodynamics.maxDynamicPressure) {
-    destroy(state, `Max-Q 초과: 동압 ${Math.round(state.dynamicPressure).toLocaleString('ko-KR')} Pa > 한계 ${config.aerodynamics.maxDynamicPressure.toLocaleString('ko-KR')} Pa`);
+  const qLimit = winged ? config.shuttle.maxDynamicPressure : config.aerodynamics.maxDynamicPressure;
+  if (state.dynamicPressure > qLimit) {
+    destroy(state, `Max-Q 초과: 동압 ${Math.round(state.dynamicPressure).toLocaleString('ko-KR')} Pa > 한계 ${qLimit.toLocaleString('ko-KR')} Pa`);
     return;
   }
 
@@ -195,6 +244,18 @@ export function stepFlight(state, config, dt) {
     state.dynamicPressure = 0;
     if (contact.impactSpeed > 0) state.lastImpactSpeed = contact.impactSpeed;
     // 착지 순간의 (그 천체 표면 기준) 속도·기울기를 기록하고, 기준을 넘으면 폭발(파손) 처리
+    if (winged && contact.bodyId === 'planet') {
+      // 궤도선: 바퀴 착지 → 통과하면 수평 속도를 그대로 가진 채 활주
+      const td = evaluateWheelTouchdown(state, config, contact.impactVelocity);
+      state.touchdown = { ...td, time: state.time, position: vec3.clone(state.position), bodyId: 'planet' };
+      if (td.safe) {
+        state.rolling = true;
+        state.velocity = td.horizontalVelocity;
+      } else {
+        destroy(state, `착륙 실패: ${td.failures.join(', ')}`);
+      }
+      return;
+    }
     const touchdown = evaluateTouchdown(contact.surfaceOffset, contact.impactVelocity, orientationAtContact, config.landing);
     state.touchdown = { ...touchdown, time: state.time, position: vec3.clone(state.position), bodyId: contact.bodyId };
     if (!touchdown.safe) destroy(state, `지면 충돌: ${touchdown.failures.join(', ')}`);
@@ -225,14 +286,23 @@ export function rcsAcceleration(state, config, dt, mass) {
  * @returns {{fuelBurned:number, thrust:number, isp:number}}
  */
 function burnFuel(state, config, dt) {
-  const stage = state.stages[state.currentStage];
-  const thrust = currentThrust(state);
-  if (thrust <= 0 || !stage || stage.isp <= 0) return { fuelBurned: 0, thrust: 0, isp: 0 };
-  const massFlow = thrust / exhaustVelocity(stage.isp, config); // ṁ (kg/s)
-  const fuelBurned = Math.min(stage.fuel, massFlow * dt);
-  stage.fuel -= fuelBurned;
-  if (stage.fuel < 1e-9) stage.fuel = 0;
-  return { fuelBurned, thrust: thrust * (fuelBurned / (massFlow * dt)), isp: stage.isp };
+  if (!state.engineOn || state.destroyed || state.throttle <= 0) return { fuelBurned: 0, thrust: 0, isp: 0 };
+  // 함께 타는 단마다 자기 연료를 자기 엔진 비율로 태운다 (우주 왕복선: 고체 부스터 + 주 엔진)
+  let fuelBurned = 0;
+  let thrust = 0;
+  for (const st of activeStages(state)) {
+    if (st.fuel <= 0 || st.isp <= 0 || st.maxThrust <= 0) continue;
+    const f = state.throttle * st.maxThrust;
+    const massFlow = f / exhaustVelocity(st.isp, config); // ṁ (kg/s)
+    const burned = Math.min(st.fuel, massFlow * dt);
+    st.fuel -= burned;
+    if (st.fuel < 1e-9) st.fuel = 0;
+    fuelBurned += burned;
+    thrust += f * (burned / (massFlow * dt));
+  }
+  if (fuelBurned <= 0) return { fuelBurned: 0, thrust: 0, isp: 0 };
+  // 합친 비추력 = 총추력 / (총 연료 소모율 · g₀)
+  return { fuelBurned, thrust, isp: (thrust * dt) / (fuelBurned * config.constants.standardGravity) };
 }
 
 /**
@@ -246,11 +316,11 @@ function updateHeating(state, config, density, dt) {
   state.heatFlux = heatFlux(density, vec3.length(state.velocity), radius, h);
   state.skinTemperature = stepSkinTemperature(state.skinTemperature, state.heatFlux, dt, h);
   state.maxSkinTemperature = Math.max(state.maxSkinTemperature, state.skinTemperature);
-  const { limit, shielded } = thermalLimit(state, noseDirection(state), state.velocity, h);
+  const { limit, shielded } = thermalLimit(state, noseDirection(state), state.velocity, h, config.shuttle);
   state.thermalLimit = limit;
   state.heatShielded = shielded;
   if (state.skinTemperature > limit) {
-    destroy(state, `과열: 표면 온도 ${Math.round(state.skinTemperature).toLocaleString('ko-KR')} K > 한계 ${Math.round(limit).toLocaleString('ko-KR')} K${shielded ? '' : ' (열 차폐막이 앞면이 아님)'}`);
+    destroy(state, `과열: 표면 온도 ${Math.round(state.skinTemperature).toLocaleString('ko-KR')} K > 한계 ${Math.round(limit).toLocaleString('ko-KR')} K${shielded ? '' : isWinged(state) ? ' (배 쪽 타일이 공기를 맞도록 받음각을 크게)' : ' (열 차폐막이 앞면이 아님)'}`);
     return true;
   }
   return false;

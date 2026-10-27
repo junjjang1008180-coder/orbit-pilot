@@ -14,29 +14,31 @@
 export const DIFFICULTY_LEVELS = Object.freeze({
   easy: {
     name: '쉬움',
-    description: '기체가 튼튼해요 (Max-Q 25 kPa · 착지 수직 10 m/s · 수평 5 m/s · 기울기 20° · 열 60%). 비행 가이드 · 자동 스로틀 제한 · 자동 단 분리가 켜져요.',
-    assists: { guide: true, throttleLimit: true, autoStage: true },
+    description: '기체가 튼튼해요 (Max-Q 25 kPa · 착지 수직 10 m/s · 수평 5 m/s · 기울기 20° · 열 60% · 왕복선 바퀴 착지 8 m/s). 비행 가이드 · 자동 스로틀 제한 · 자동 단 분리가 켜져요.',
+    assists: { guide: true, throttleLimit: true, autoStage: true, autoGear: true },
     physics: {
       aerodynamics: { maxDynamicPressure: 25_000 },
       landing: { maxVerticalSpeed: 10, maxHorizontalSpeed: 5, maxTiltDeg: 20, landingZoneRadius: 80 },
       heatingFluxScale: 0.6,
       parachute: { maxDeploySpeed: 450, maxDeployDynamicPressure: 18_000 },
+      shuttleTouchdown: { maxVerticalSpeed: 8, maxRollDeg: 20, maxSpeed: 170, maxNoseDownDeg: 8, maxPitchDeg: 24 },
     },
   },
   normal: {
     name: '보통',
-    description: '원래 기준이에요. 비행 가이드가 지금 할 일을 알려 줘요.',
-    assists: { guide: true, throttleLimit: false, autoStage: false },
+    description: '원래 기준이에요 (왕복선 바퀴 착지 5 m/s). 비행 가이드가 지금 할 일을 알려 주고, 왕복선 바퀴는 300 m 에서 자동으로 내려가요.',
+    assists: { guide: true, throttleLimit: false, autoStage: false, autoGear: true },
     physics: {},
   },
   hard: {
     name: '어려움',
-    description: '기준이 엄격해요 (Max-Q 12 kPa · 착지 수직 4 m/s · 수평 2 m/s · 기울기 7° · 열 130%). 보조 기능이 없어요. 낙하산 회수는 낙하산 2개가 필요해요.',
+    description: '기준이 엄격해요 (Max-Q 12 kPa · 착지 수직 4 m/s · 수평 2 m/s · 기울기 7° · 열 130% · 왕복선 바퀴 착지 3.5 m/s). 보조 기능이 없어요. 낙하산 회수는 낙하산 2개가 필요해요.',
     assists: { guide: false, throttleLimit: false, autoStage: false },
     physics: {
       aerodynamics: { maxDynamicPressure: 12_000 },
       landing: { maxVerticalSpeed: 4, maxHorizontalSpeed: 2, maxTiltDeg: 7, landingZoneRadius: 25 },
       heatingFluxScale: 1.3,
+      shuttleTouchdown: { maxVerticalSpeed: 3.5, maxRollDeg: 10, maxSpeed: 140 },
     },
   },
 });
@@ -62,6 +64,7 @@ export function applyDifficulty(baseConfig, level) {
   if (p.aerodynamics) Object.assign(config.aerodynamics, p.aerodynamics);
   if (p.landing) Object.assign(config.landing, p.landing);
   if (p.parachute && config.parachute) Object.assign(config.parachute, p.parachute);
+  if (p.shuttleTouchdown && config.shuttle) Object.assign(config.shuttle.touchdown, p.shuttleTouchdown);
   if (p.heatingFluxScale && config.heating) config.heating.fluxCoefficient *= p.heatingFluxScale;
   config.difficulty = { level: DIFFICULTY_LEVELS[level] ? level : DEFAULT_DIFFICULTY, name: d.name, assists: { ...d.assists } };
   return deepFreeze(config);

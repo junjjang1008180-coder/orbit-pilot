@@ -23,7 +23,9 @@ import {
 } from '../physics/flightPhysics.js';
 import { airDensity } from '../physics/aerodynamics.js';
 import { gravityMagnitudeAtRadius } from '../physics/gravity.js';
-import { vec3 } from '../physics/vectorMath.js';
+import { vec3, quat } from '../physics/vectorMath.js';
+import { isWinged, attitudeAngles } from '../physics/winged.js';
+import { runwayFrame, runwayCoords, runwayPoint, isOnRunway, runwayList, getRunway, nearestRunway } from '../landing/runway.js';
 import { computeWarnings } from './flightWarnings.js';
 import { computeOrbit, isCircularOrbitAchieved, timeToApsides } from '../orbit/orbitalElements.js';
 import { localFrame, elevationAndHeading, toLocalENU } from '../physics/referenceFrame.js';
@@ -102,6 +104,9 @@ export class FlightSimulation {
     this.orbitAchievedAt = null; // 원궤도 진입 판정을 처음 만족한 시각 (s), 아직이면 null
     this.hasLiftedOff = false; // 한 번이라도 지면을 떠났는지
     this.liftoffTime = null; // 이륙 시각 (s) — 경과 시간 표시용
+    this.shuttleLandedAt = null; // 우주 왕복선이 활주로에 멈춘 시각 (s)
+    this.shuttleLandedRunway = null; // 멈춘 활주로 이름
+    this.targetRunwayId = this.targetRunwayId ?? null; // O 로 고른 목표 활주로 (null = 자동) — 다시 시작해도 유지
     // 달
     this.referenceBodyId = 'planet'; // 로켓 본체가 지금 있는 중력권 ('planet' | 'moon')
     this.moonEncounteredAt = null; // 달 중력권에 처음 들어간 시각 (s)
@@ -128,6 +133,34 @@ export class FlightSimulation {
       this.stationPhase = this.stationPhaseCache.get(definition);
       this.station = createStationVehicle(this.config, this.stationPhase);
     }
+    // 우주 왕복선 활공 착륙 연습: 궤도선만 활주로 서쪽 상공에서 시작
+    if (this.scenario.glideStart && this.rocket.isShuttle) this.placeForGlide();
+  }
+
+  /** 활공 착륙 연습 시작 상태: 궤도선만, 활주로 시작점 서쪽 상공에서 동쪽으로 활공 중 */
+  placeForGlide() {
+    const s = this.state;
+    const c = this.config;
+    const g = c.shuttle.glideStart;
+    const f = runwayFrame(c);
+    s.currentStage = s.stages.findIndex((st) => st.winged);
+    s.position = runwayPoint(c, -f.halfLength - g.distanceWest, 0, g.altitude);
+    const frame = localFrame(s.position, c.planet.northPoleDirection);
+    const gamma = (-g.descentAngleDeg * Math.PI) / 180;
+    const alpha = (g.alphaDeg * Math.PI) / 180;
+    const vDir = vec3.add(vec3.scale(frame.east, Math.cos(gamma)), vec3.scale(frame.up, Math.sin(gamma)));
+    const liftDir = vec3.normalize(vec3.addScaled(frame.up, vDir, -vec3.dot(frame.up, vDir)));
+    const nose = vec3.add(vec3.scale(vDir, Math.cos(alpha)), vec3.scale(liftDir, Math.sin(alpha)));
+    const top = vec3.sub(vec3.scale(liftDir, Math.cos(alpha)), vec3.scale(vDir, Math.sin(alpha)));
+    s.orientation = quat.fromBasis(vec3.cross(nose, top), nose, top);
+    s.velocity = vec3.scale(vDir, g.speed);
+    s.landed = false;
+    s.engineOn = false;
+    s.throttle = 0;
+    s.gearDown = false;
+    this.hasLiftedOff = true;
+    this.liftoffTime = 0;
+    this.maxAltitude = g.altitude;
   }
 
   /** 같은 로켓으로 처음부터 다시 시작 */
@@ -155,6 +188,24 @@ export class FlightSimulation {
     c.roll = clampUnit(input.roll);
     const t = input.translate ?? [0, 0, 0];
     c.translate = [clampUnit(t[0]), clampUnit(t[1]), clampUnit(t[2])];
+    c.brake = Boolean(input.brake); // V: 바퀴 브레이크 · 에어브레이크 (궤도선)
+  }
+
+  /** Y: 착륙 바퀴 내리기/올리기 (우주 왕복선 궤도선) */
+  toggleGear() {
+    const v = this.getControlled();
+    if (!isWinged(v)) {
+      announce(v, '착륙 바퀴는 우주 왕복선 궤도선에만 있어요 (외부 탱크를 뗀 뒤)');
+      return false;
+    }
+    if (v.landed) {
+      announce(v, '땅 위에서는 바퀴를 올릴 수 없어요');
+      return v.gearDown;
+    }
+    v.gearDown = !v.gearDown;
+    announce(v, v.gearDown ? '착륙 바퀴 내림' : '착륙 바퀴 올림');
+    this.events.push({ type: 'gear' });
+    return v.gearDown;
   }
 
   /** R: RCS(평행이동 추진기) 켜기/끄기 */
@@ -204,16 +255,31 @@ export class FlightSimulation {
     }
     const pc = this.config.parachute;
     const speed = vec3.length(v.velocity);
-    if (speed > pc.maxDeploySpeed || v.dynamicPressure > pc.maxDeployDynamicPressure) {
+    const maxSpeed = this.parachuteDeploySpeed(v);
+    if (speed > maxSpeed || v.dynamicPressure > pc.maxDeployDynamicPressure) {
       v.parachute = 'torn';
-      announce(v, `낙하산이 찢어졌어요 — 너무 빨라요 (${Math.round(speed)} m/s, 펼칠 수 있는 속도 ${pc.maxDeploySpeed} m/s 이하)`);
+      announce(v, `낙하산이 찢어졌어요 — 너무 빨라요 (${Math.round(speed)} m/s, 펼칠 수 있는 속도 ${maxSpeed} m/s 이하)`);
       this.events.push({ type: 'parachuteTorn' });
       return false;
     }
     v.parachute = 'deployed';
-    announce(v, `낙하산 펼침 — 보조 낙하산, 고도 ${(pc.fullDeployAltitude / 1000).toFixed(1)} km 아래에서 다 펼쳐져요`);
+    announce(v, isWinged(v) ? '감속 낙하산 펼침' : `낙하산 펼침 — 보조 낙하산, 고도 ${(pc.fullDeployAltitude / 1000).toFixed(1)} km 아래에서 다 펼쳐져요`);
     this.events.push({ type: 'parachute' });
     return true;
+  }
+
+  /** 붙어 있는 낙하산을 펼칠 수 있는 최대 속도 (부품마다 다르면 가장 낮은 값, m/s) */
+  parachuteDeploySpeed(v) {
+    let limit = Infinity;
+    for (let i = v.currentStage; i < v.stages.length; i++) {
+      if ((v.stages[i].parachuteArea ?? 0) > 0) limit = Math.min(limit, v.stages[i].parachuteMaxDeploySpeed ?? Infinity);
+    }
+    return Number.isFinite(limit) ? limit : this.config.parachute.maxDeploySpeed;
+  }
+
+  /** 다음(위) 단이 궤도선인지 — 외부 탱크가 아직 붙어 있는 우주 왕복선 */
+  nextStageWinged(v = this.state) {
+    return Boolean(v.stages[v.currentStage + 1]?.winged);
   }
 
   /** Backspace: 비상 중단 — 엔진을 끄고 재시작 전까지 엔진·자세 조종을 잠근다 */
@@ -290,6 +356,9 @@ export class FlightSimulation {
       program = 'maneuver';
     } else if (this.canAutoDock?.(v)) {
       program = 'docking';
+    } else if (isWinged(v) || (this.nextStageWinged(v) && this.orbitAchievedAt !== null && !v.landed)) {
+      // 우주 왕복선 궤도선 (또는 궤도에서 외부 탱크를 아직 안 뗀 상태): 자동 귀환·착륙
+      if (!v.landed || v.rolling) program = 'shuttleLanding';
     } else if (this.getReference(v).id === 'moon') {
       if (!v.landed) program = 'moonLanding';
     } else if (!v.landed && this.orbitAchievedAt !== null && attachedParachute(v).full > 0) {
@@ -303,6 +372,9 @@ export class FlightSimulation {
     }
     ap.program = program;
     ap.phase = '';
+    ap.runwayId = null; // 우주 왕복선 자동 귀환: 목표 활주로를 새로 정한다
+    ap.lastErrs = null;
+    ap.touchdownTime = null;
     announce(v, `${PROGRAM_LABELS[program]} 시작`);
     return program;
   }
@@ -322,16 +394,19 @@ export class FlightSimulation {
     if ((!force && this.controlledId !== 'rocket') || s.destroyed || s.currentStage >= s.stages.length - 1) return false;
 
     const stage = s.stages[s.currentStage];
+    const nextStage = s.stages[s.currentStage + 1];
     const nose = noseDirection(s);
     const totalMass = rocketMass(s);
     const stageMass = stage.dryMass + stage.fuel;
     const upperMass = totalMass - stageMass;
     const separationSpeed = this.config.staging.separationSpeed;
+    // 떼어 내는 방향: 보통은 기수 반대(아래). 궤도선에서 외부 탱크를 뗄 때는 배 쪽(−Z) 으로 밀어낸다
+    const pushDir = nextStage?.winged ? quat.rotate(s.orientation, [0, 0, 1]) : nose;
 
     // 운동량 보존: m_단·Δv_단 + m_위·Δv_위 = 0, 상대 속도 = separationSpeed
     const vehicle = createSeparatedVehicle(s, stage, {
       position: vec3.clone(s.position),
-      velocity: vec3.addScaled(s.velocity, nose, (-separationSpeed * upperMass) / totalMass),
+      velocity: vec3.addScaled(s.velocity, pushDir, (-separationSpeed * upperMass) / totalMass),
     });
     const debris = {
       id: this.nextDebrisId++,
@@ -351,15 +426,21 @@ export class FlightSimulation {
       landingDistance: null,
     };
     // 부스터 착륙 미니게임은 행성에서만 (달 근처에서 떼어 낸 단은 그냥 분리된 단)
-    if (!this.booster && stage.maxThrust > 0 && !s.landed && this.getReference(s).id === 'planet') {
+    // (우주 왕복선의 옆에 붙은 고체 부스터는 착륙 미니게임 대상이 아님)
+    if (!this.booster && stage.maxThrust > 0 && !stage.sideMounted && !s.landed && this.getReference(s).id === 'planet') {
       debris.isBooster = true;
       debris.landingZone = predictImpactPoint(vehicle, this.config);
       this.booster = debris;
     }
     this.debris.push(debris);
 
-    s.velocity = vec3.addScaled(s.velocity, nose, (separationSpeed * stageMass) / totalMass);
-    s.position = vec3.addScaled(s.position, nose, stage.length);
+    s.velocity = vec3.addScaled(s.velocity, pushDir, (separationSpeed * stageMass) / totalMass);
+    if (nextStage?.winged) {
+      // 궤도선만 남음: 기준점을 스택 아래 끝에서 궤도선 주 바퀴 접지점으로 옮긴다
+      s.position = vec3.add(s.position, quat.rotate(s.orientation, this.config.shuttle.orbiterOffset));
+    } else if (!stage.sideMounted) {
+      s.position = vec3.addScaled(s.position, nose, stage.length);
+    }
     s.currentStage += 1;
     s.landed = false;
     s.liftoffBlocked = false;
@@ -424,6 +505,10 @@ export class FlightSimulation {
     } else if (thrusting && max > c.timeWarp.maxWhileThrusting) {
       max = c.timeWarp.maxWhileThrusting;
       reason = '엔진 가동 중';
+    }
+    if (v.rolling && max > c.timeWarp.maxWhileThrusting) {
+      max = c.timeWarp.maxWhileThrusting;
+      reason = '활주 중';
     }
     if (t.planetAltitude < c.atmosphere.topAltitude && !t.landed && max > c.timeWarp.maxInAtmosphere) {
       max = c.timeWarp.maxInAtmosphere;
@@ -505,6 +590,88 @@ export class FlightSimulation {
     this.maxAltitude = Math.max(this.maxAltitude, altitude(this.state, this.config));
     this.checkOrbitAchieved();
     this.updateReferenceBody();
+    // 우주 왕복선: 활주로 위에 바퀴로 내려 멈췄으면 기록
+    const s = this.state;
+    const stoppedOn = this.shuttleLandedAt === null && isWinged(s) && s.landed && !s.rolling && !s.destroyed && s.touchdown?.wheels && s.touchdown.safe
+      ? isOnRunway(this.config, s.position, this.config.runway.tolerance ?? 5)
+      : null;
+    if (stoppedOn) {
+      this.shuttleLandedAt = s.time;
+      this.shuttleLandedRunway = stoppedOn.name;
+      announce(s, `착륙 완료! ${stoppedOn.name}에 멈췄어요`);
+      this.events.push({ type: 'landing', result: 'success' });
+    }
+  }
+
+  /**
+   * 지금 안내하는 활주로: 자동 귀환 중이면 자동조종이 정한 곳, 아니면 O 로 고른 곳,
+   * 땅 위면 지금 서 있는 곳, 그 밖에는 가장 가까운 곳
+   */
+  activeRunway(s) {
+    const c = this.config;
+    const ap = s.autopilot;
+    if (ap?.program === 'shuttleLanding' && ap.runwayId) return getRunway(c, ap.runwayId);
+    if (s.landed) {
+      const on = isOnRunway(c, s.position, c.runway.tolerance ?? 5);
+      if (on) return on;
+    }
+    if (this.targetRunwayId) return getRunway(c, this.targetRunwayId);
+    return nearestRunway(c, s.position);
+  }
+
+  /** O: 목표 활주로 바꾸기 (자동 → 활주로 1 → 2 → … → 자동) */
+  cycleRunway() {
+    const ids = [null, ...runwayList(this.config).map((r) => r.id)];
+    const next = ids[(ids.indexOf(this.targetRunwayId) + 1) % ids.length];
+    this.targetRunwayId = next;
+    const v = this.getControlled();
+    const ap = v.autopilot;
+    if (ap.program === 'shuttleLanding' && ['deorbitWait', ''].includes(ap.phase ?? '')) {
+      ap.runwayId = null; // 역추진 전이면 새 목표로 다시 계산
+      ap.lastErrs = null;
+    }
+    announce(v, next ? `목표 활주로: ${getRunway(this.config, next).name}` : '목표 활주로: 자동 (가장 먼저 닿는 곳)');
+    return next;
+  }
+
+  /** 우주 왕복선 표시용 값 (활주로까지 거리·방위, 받음각, 바퀴 등) */
+  shuttleInfo(s) {
+    const c = this.config;
+    const runway = this.activeRunway(s);
+    const f = runwayFrame(c, runway);
+    const rc = runwayCoords(c, s.position, runway);
+    const threshold = runwayPoint(c, -f.halfLength, 0, 0, runway);
+    const toThreshold = vec3.sub(threshold, s.position);
+    const frame = localFrame(s.position, c.planet.northPoleDirection);
+    const d = toLocalENU(toThreshold, frame);
+    const ground = Math.hypot(-f.halfLength - rc.along, rc.cross);
+    const angles = isWinged(s) ? attitudeAngles(s) : { pitchDeg: 0, rollDeg: 0 };
+    return {
+      winged: isWinged(s),
+      gearDown: s.gearDown,
+      brakes: Boolean(s.controls.brake || s.autoBrake),
+      speedbrake: s.speedbrake ?? 0,
+      alphaDeg: ((s.angleOfAttack ?? 0) * 180) / Math.PI,
+      bankDeg: angles.rollDeg,
+      rolling: s.rolling,
+      onRunway: Boolean(isOnRunway(c, s.position)),
+      runwayId: runway.id,
+      runwayName: runway.name,
+      runwayAuto: !this.targetRunwayId, // 목표를 자동으로 고르는 중
+      runwayCount: runwayList(c).length,
+      landedRunway: this.shuttleLandedRunway,
+      threshold, // 시작점 위치 (네비볼 표시용, m)
+      runwayAlong: rc.along, // 활주로 가운데 기준 동쪽 거리 (m)
+      runwayCross: rc.cross, // 북쪽으로 벗어난 거리 (m)
+      distanceToThreshold: ground, // 활주로 시작점(서쪽 끝)까지 지표 거리 (m)
+      bearingDeg: ((Math.atan2(d.east, d.north) * 180) / Math.PI + 360) % 360, // 시작점 방위
+      // 시작점에서 본 고도각 (활공각, °)
+      glideSlopeDeg: (Math.atan2(rc.height, Math.max(1, -f.halfLength - rc.along)) * 180) / Math.PI,
+      landed: this.shuttleLandedAt !== null,
+      maxDeploySpeed: this.parachuteDeploySpeed(s),
+      runwayHalfLength: f.halfLength, // 활주로 길이의 절반 (m)
+      limits: c.shuttle.touchdown, // 바퀴 착지 기준
+    };
   }
 
   /**
@@ -522,6 +689,12 @@ export class FlightSimulation {
         if (!vehicle.throttleLimited) announce(vehicle, '자동 스로틀 제한: 동압이 높아 스로틀을 낮췄어요');
         vehicle.throttleLimited = true;
       } else vehicle.throttleLimited = false;
+    }
+    // 자동 바퀴 내림: 궤도선이 바퀴를 올린 채 고도 300 m 아래로 내려오면
+    if (assists.autoGear && isWinged(vehicle) && !vehicle.gearDown && vehicle.position && vec3.length(vehicle.position) - this.config.planet.radius < 300) {
+      vehicle.gearDown = true;
+      announce(vehicle, '자동 바퀴 내림 — 고도 300 m');
+      this.events.push({ type: 'gear' });
     }
     if (assists.autoStage && vehicle === this.state && vehicle.engineOn && !hasFuel(vehicle) && vehicle.currentStage < vehicle.stages.length - 1) {
       const throttle = vehicle.throttle;
@@ -860,6 +1033,9 @@ export class FlightSimulation {
       // 부스터 착륙 미션에서 1단에 남길 연료 비율 (0 = 다 쓴다)
       boosterReserve: isRocket && this.scenario.boosterRecovery && !this.booster ? this.config.autopilot.boosterReserveFuelRatio : 0,
       deployParachute: () => this.deployParachuteFor(vehicle),
+      nextStageWinged: isRocket && this.nextStageWinged(vehicle),
+      targetRunwayId: this.targetRunwayId,
+      parachuteDeploySpeed: this.parachuteDeploySpeed(vehicle),
       landingZone: debris?.isBooster ? debris.landingZone : null,
       target: this.getTarget(vehicle),
       dockingStep: this.dockingStep ? (v, ctx) => this.dockingStep(v, ctx) : null,
@@ -1070,7 +1246,9 @@ export class FlightSimulation {
       airDensity: airDensity(planetAlt, c.atmosphere), // 공기 밀도 (kg/m³)
       dynamicPressure: s.dynamicPressure, // 동압 (Pa)
       maxDynamicPressureSeen: s.maxDynamicPressureSeen, // 이번 비행 최대 동압 (Pa)
-      maxQLimit: c.aerodynamics.maxDynamicPressure, // Max-Q 한계 (Pa)
+      maxQLimit: isWinged(s) && c.shuttle ? c.shuttle.maxDynamicPressure : c.aerodynamics.maxDynamicPressure, // Max-Q 한계 (Pa)
+      winged: isWinged(s), // 날개 달린 궤도선 (받음각이 커도 자세 불안정이 아님)
+      shuttle: isRocket && this.rocket.isShuttle ? this.shuttleInfo(s) : null,
       angleOfAttackDeg, // 받음각 (°)
       // 재진입 가열
       skinTemperature: s.skinTemperature, // 표면 온도 (K)
@@ -1109,6 +1287,7 @@ export class FlightSimulation {
       moonEncountered: isRocket && this.moonEncounteredAt !== null, // 달 중력권에 들어간 적이 있는지
       moonOrbitAchieved: isRocket && this.moonOrbitAchievedAt !== null, // 달 궤도 진입 판정을 만족한 적이 있는지
       moonLanded: isRocket && this.moonLandedAt !== null, // 달에 안전하게 착륙했는지
+      shuttleLanded: isRocket && this.shuttleLandedAt !== null, // 우주 왕복선이 활주로에 멈췄는지
       totalFuel: s.stages.slice(s.currentStage).reduce((sum, st) => sum + st.fuel, 0), // 남은 전체 연료 (kg)
       initialTotalFuel: this.initialTotalFuel, // 처음 전체 연료 (kg)
       landingSupported: true, // 부스터 착륙 판정 기능

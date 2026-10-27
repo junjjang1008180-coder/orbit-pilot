@@ -17,7 +17,8 @@ export function buildRocket(definition, partsCatalog) {
       if (!part) throw new Error(`알 수 없는 부품 id: ${partId}`);
       return { id: partId, ...part };
     });
-    const engines = parts.filter((p) => p.kind === 'engine');
+    // 추력이 있는 부품 (엔진, 궤도 조종 엔진이 달린 궤도선 등)
+    const engines = parts.filter((p) => p.thrust > 0);
     return {
       index,
       parts,
@@ -34,9 +35,16 @@ export function buildRocket(definition, partsCatalog) {
       // 낙하산 면적 합 (m²): 다 펼친 면적, 보조 낙하산 면적
       parachuteArea: sum(parts, (p) => (p.kind === 'parachute' ? p.canopyArea : 0)),
       parachuteSemiArea: sum(parts, (p) => (p.kind === 'parachute' ? p.semiArea : 0)),
+      // 낙하산을 펼칠 수 있는 최대 속도 (부품마다 다르면 가장 낮은 값, 없으면 설정 기본값)
+      parachuteMaxDeploySpeed: Math.min(Infinity, ...parts.filter((p) => p.kind === 'parachute' && p.maxDeploySpeed).map((p) => p.maxDeploySpeed)),
+      // 우주 왕복선: 옆에 붙는 단(떼어 내도 기준점이 그대로), 아래 단과 함께 점화되는 단, 날개 달린 궤도선
+      sideMounted: parts.some((p) => p.mount === 'side'),
+      ignitesWithStageBelow: parts.some((p) => p.ignitesWithStageBelow),
+      winged: parts.some((p) => p.winged),
     };
   });
-  return { name: definition.name, stages };
+  // 우주 왕복선 (날개 달린 궤도선 단이 있으면) — 화면 모델·조종석이 따로 있다
+  return { name: definition.name, stages, isShuttle: stages.some((s) => s.winged) };
 }
 
 function sum(list, pick) {

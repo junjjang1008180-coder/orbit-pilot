@@ -6,10 +6,12 @@
  *   - 스로틀 레버(왼쪽): 스로틀 0~100% 만큼 앞으로 밀린다, 눈금·손잡이
  *   - 머리 위 스위치 패널: 자세 보조·RCS·자동 비행·낙하산·지도·조명 스위치가 상태에 따라 젖혀지고 불이 켜짐
  *   - 계기판 표시등 줄(상태 글자), 마스터 경고등(경고가 있으면 깜빡임), 경과 시간 시계
- *   - 의자 팔걸이, 옆 벽 차단기 패널·명판, 천장 배선
+ *   - 승무원 의자 3개와 흰 비행복 우주비행사(양옆 2명), 조종간·스로틀을 쥔 내 손·몸 (crew.js)
+ *   - 옆 벽 차단기 패널·명판, 천장 배선
  * 물리 상태는 읽기만 한다.
  */
 import * as THREE from 'three';
+import { createCrewSeat, createAstronaut, createPilotBody, createGlove } from './crew.js';
 
 /** 캔버스 글자판 (평면은 +Z 를 향한다) */
 function canvasPlane(width, height, pxW, pxH) {
@@ -40,113 +42,203 @@ export function createCockpitControls(cabin, { metal, darkMetal, padMat }) {
   const rubber = new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 1, emissive: 0x040405 });
   const red = new THREE.MeshStandardMaterial({ color: 0xd33a2c, roughness: 0.45, emissive: 0x3a0a06 });
   const yellow = new THREE.MeshStandardMaterial({ color: 0xf2c230, roughness: 0.5, emissive: 0x2a1f00 });
-  const fabric = new THREE.MeshStandardMaterial({ color: 0x39424e, roughness: 1, emissive: 0x0d1013 });
 
-  // ── 의자 팔걸이·앞 쿠션 ──────────────────────────────────
-  for (const x of [-0.5, 0.5]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.7, 0.08), fabric);
-    arm.position.set(x, 0.0, -0.5);
-    cabin.add(arm);
-    const pad = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.6, 4, 10), padMat);
-    pad.rotation.x = Math.PI / 2;
-    pad.position.set(x, 0.0, -0.45);
-    cabin.add(pad);
-    const strut = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.3), darkMetal);
-    strut.position.set(x, 0.25, -0.65);
-    cabin.add(strut);
-  }
-  const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.3, 0.12), fabric);
-  cushion.position.set(0, 0.05, -0.68);
-  cabin.add(cushion);
-  // 어깨 안전띠 (위에서 내려오는 두 줄)
-  const strapMat = new THREE.MeshStandardMaterial({ color: 0x8a6f2a, roughness: 0.9, emissive: 0x140f04 });
-  for (const x of [-0.17, 0.17]) {
-    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, 0.55), strapMat);
-    strap.position.set(x, 0.05, -0.3);
-    strap.rotation.y = x > 0 ? -0.25 : 0.25;
-    cabin.add(strap);
-  }
-  const buckle = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.015, 20), metal);
-  buckle.rotation.x = Math.PI / 2;
-  buckle.position.set(0, 0.07, -0.52);
-  cabin.add(buckle);
-
-  // ── 조종간 (오른쪽) ─────────────────────────────────────
+  // ── 조종간 (오른쪽): 권총형 손잡이 + 주름 고무 덮개 + 방아쇠·덮개·트림 스위치 ──
   const stickBase = new THREE.Group();
   stickBase.position.set(0.3, 0.36, -0.44);
   cabin.add(stickBase);
-  const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.075, 0.02, 24), darkMetal);
-  plate.rotation.x = Math.PI / 2;
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.018), darkMetal);
+  plate.position.z = -0.002;
   stickBase.add(plate);
   for (let i = 0; i < 4; i++) {
     const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.01, 8), metal);
     screw.rotation.x = Math.PI / 2;
-    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-    screw.position.set(Math.cos(a) * 0.055, Math.sin(a) * 0.055, 0.012);
+    screw.position.set(i % 2 ? 0.062 : -0.062, i < 2 ? 0.062 : -0.062, 0.008);
     stickBase.add(screw);
   }
-  const boot = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.05, 0.07, 18, 3), rubber);
-  boot.rotation.x = Math.PI / 2;
-  boot.position.z = 0.045;
-  stickBase.add(boot);
+  // 축 방향 표시 (PITCH ↕ · ROLL ↔)
+  const stickLabel = canvasPlane(0.14, 0.14, 256, 256);
+  stickLabel.ctx.strokeStyle = '#cfd6de';
+  stickLabel.ctx.lineWidth = 6;
+  stickLabel.ctx.beginPath();
+  stickLabel.ctx.arc(128, 128, 92, 0, Math.PI * 2);
+  stickLabel.ctx.stroke();
+  stickLabel.ctx.fillStyle = '#cfd6de';
+  stickLabel.ctx.font = 'bold 26px system-ui, sans-serif';
+  stickLabel.ctx.textAlign = 'center';
+  stickLabel.ctx.fillText('PITCH', 128, 30);
+  stickLabel.ctx.fillText('ROLL', 222, 136);
+  stickLabel.ctx.fillText('ROLL', 34, 136);
+  stickLabel.ctx.fillText('PITCH', 128, 246);
+  stickLabel.texture.needsUpdate = true;
+  stickLabel.mesh.position.z = 0.0075;
+  stickBase.add(stickLabel.mesh);
+  // 주름 고무 덮개 (위로 갈수록 가늘어지는 고리 여러 개)
+  for (let i = 0; i < 6; i++) {
+    const r = 0.045 - i * 0.0045;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.008, 8, 24), rubber);
+    ring.position.z = 0.012 + i * 0.011;
+    stickBase.add(ring);
+  }
   const stickPivot = new THREE.Group(); // 이 그룹이 입력에 따라 기운다
-  stickPivot.position.z = 0.06;
+  stickPivot.position.z = 0.03;
   stickBase.add(stickPivot);
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.15, 12), metal);
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.012, 0.09, 12), metal);
   shaft.rotation.x = Math.PI / 2;
-  shaft.position.z = 0.075;
+  shaft.position.z = 0.045;
   stickPivot.add(shaft);
-  const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.07, 6, 14), black);
-  grip.rotation.x = Math.PI / 2;
-  grip.position.set(0, -0.005, 0.18);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.012, 16), darkMetal);
+  collar.rotation.x = Math.PI / 2;
+  collar.position.z = 0.09;
+  stickPivot.add(collar);
+  // 권총형 손잡이: 옆모습(앞뒤 × 높이)을 두께만큼 밀어 만든다 — 손가락 홈 3개, 위가 앞으로 휜다
+  const gs = new THREE.Shape();
+  gs.moveTo(-0.022, 0);
+  gs.lineTo(0.02, 0);
+  gs.quadraticCurveTo(0.028, 0.012, 0.022, 0.024);
+  gs.quadraticCurveTo(0.03, 0.036, 0.024, 0.048);
+  gs.quadraticCurveTo(0.032, 0.06, 0.027, 0.072);
+  gs.quadraticCurveTo(0.036, 0.096, 0.03, 0.112);
+  gs.quadraticCurveTo(0.012, 0.128, -0.02, 0.118);
+  gs.quadraticCurveTo(-0.036, 0.08, -0.03, 0.04);
+  gs.quadraticCurveTo(-0.028, 0.012, -0.022, 0);
+  const gripGeo = new THREE.ExtrudeGeometry(gs, { depth: 0.038, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.007, bevelSegments: 3, curveSegments: 10 });
+  gripGeo.translate(0, 0, -0.019);
+  gripGeo.applyMatrix4(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)));
+  const grip = new THREE.Mesh(gripGeo, black);
+  grip.position.z = 0.095;
+  grip.rotation.x = -0.18;
   stickPivot.add(grip);
-  const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.012, 12), red);
-  hat.rotation.x = Math.PI / 2;
-  hat.position.set(0, 0.0, 0.232);
-  stickPivot.add(hat);
-  const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.014, 0.01), yellow);
-  thumb.position.set(-0.022, -0.012, 0.21);
-  stickPivot.add(thumb);
-  const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.01, 0.03), metal);
-  trigger.position.set(0, 0.03, 0.17);
+  const gripTop = new THREE.Group(); // 손잡이 머리 (스위치들)
+  gripTop.position.set(0, 0.02, 0.215);
+  gripTop.rotation.x = -0.18;
+  stickPivot.add(gripTop);
+  // 4방향 트림 스위치 (작은 십자 모자)
+  const hatBase = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.01, 0.006, 14), darkMetal);
+  hatBase.rotation.x = Math.PI / 2;
+  hatBase.position.set(-0.006, -0.004, 0);
+  gripTop.add(hatBase);
+  for (const [w, h] of [[0.016, 0.005], [0.005, 0.016]]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.006), metal);
+    arm.position.set(-0.006, -0.004, 0.005);
+    gripTop.add(arm);
+  }
+  // 덮개 달린 빨간 단추 (엄지)
+  const redBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.006, 12), red);
+  redBtn.rotation.x = Math.PI / 2;
+  redBtn.position.set(0.012, 0.01, -0.002);
+  gripTop.add(redBtn);
+  const btnGuard = new THREE.Mesh(new THREE.TorusGeometry(0.009, 0.0018, 6, 16, Math.PI * 1.3), metal);
+  btnGuard.position.set(0.012, 0.01, 0.002);
+  gripTop.add(btnGuard);
+  const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.01, 0.008), yellow); // 노란 엄지 단추
+  thumb.position.set(-0.024, -0.016, -0.012);
+  gripTop.add(thumb);
+  // 방아쇠 + 방아쇠 울
+  const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.008, 0.028), metal);
+  trigger.position.set(0, 0.04, 0.165);
+  trigger.rotation.x = 0.35;
   stickPivot.add(trigger);
+  const triggerGuard = new THREE.Mesh(new THREE.TorusGeometry(0.024, 0.0025, 6, 18, Math.PI), darkMetal);
+  triggerGuard.rotation.set(0, Math.PI / 2, Math.PI / 2);
+  triggerGuard.position.set(0, 0.035, 0.155);
+  stickPivot.add(triggerGuard);
 
-  // ── 스로틀 레버 (왼쪽) ──────────────────────────────────
+  // ── 스로틀 레버 (왼쪽): 호 모양 눈금판 + 멈춤 홈 + T 자 손잡이 + 마찰 잠금 ──
   const quadrant = new THREE.Group();
   quadrant.position.set(-0.3, 0.36, -0.44);
   cabin.add(quadrant);
-  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.24, 0.07), darkMetal);
-  housing.position.z = 0.02;
+  const housing = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.26, 0.06), darkMetal);
+  housing.position.z = 0.015;
   quadrant.add(housing);
-  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.2, 0.005), black);
-  slot.position.z = 0.056;
-  quadrant.add(slot);
-  for (let i = 0; i <= 10; i++) {
-    const tick = new THREE.Mesh(new THREE.BoxGeometry(i % 5 === 0 ? 0.028 : 0.016, 0.003, 0.003), i === 10 ? red : metal);
-    tick.position.set(0.03, -0.09 + i * 0.018, 0.057);
-    quadrant.add(tick);
+  // 옆 눈금판 (레버가 도는 호를 따라 눈금)
+  for (const side of [-1, 1]) {
+    const cheek = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.25, 0.03), black);
+    cheek.position.set(side * 0.05, 0, 0.05);
+    quadrant.add(cheek);
   }
-  const leverPivot = new THREE.Group();
-  leverPivot.position.set(0, 0, -0.02);
-  quadrant.add(leverPivot);
-  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.16, 10), metal);
-  arm.rotation.x = Math.PI / 2;
-  arm.position.z = 0.08;
-  leverPivot.add(arm);
-  const knob = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.035, 0.035), red);
-  knob.position.z = 0.17;
-  leverPivot.add(knob);
-  const knobCap = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.012, 0.037), black);
-  knobCap.position.set(0, 0.012, 0.17);
-  leverPivot.add(knobCap);
-  const thrLabel = canvasPlane(0.08, 0.03, 128, 48);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.22, 0.005), black);
+  slot.position.z = 0.046;
+  quadrant.add(slot);
+  // 멈춤 홈: 0 %(끄기)와 100 % 에서 레버가 걸린다 (빨간 띠)
+  for (const y of [-0.105, 0.105]) {
+    const detent = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.006), red);
+    detent.position.set(0, y, 0.047);
+    quadrant.add(detent);
+  }
+  const thrLabel = canvasPlane(0.085, 0.24, 128, 360);
   thrLabel.ctx.fillStyle = '#d9e1ea';
-  thrLabel.ctx.font = 'bold 30px system-ui, sans-serif';
+  thrLabel.ctx.font = 'bold 22px system-ui, sans-serif';
+  thrLabel.ctx.textAlign = 'right';
+  ['끄기', '25', '50', '75', '최대'].forEach((txt, i) => thrLabel.ctx.fillText(txt, 54, 350 - i * 82));
+  for (let i = 0; i <= 20; i++) thrLabel.ctx.fillRect(66, 340 - i * 16.4, i % 5 === 0 ? 30 : 16, 3);
+  thrLabel.ctx.font = 'bold 24px system-ui, sans-serif';
   thrLabel.ctx.textAlign = 'center';
-  thrLabel.ctx.fillText('추력', 64, 36);
   thrLabel.texture.needsUpdate = true;
-  thrLabel.mesh.position.set(0, -0.135, 0.056);
+  thrLabel.mesh.position.set(0.004, 0, 0.0465);
   quadrant.add(thrLabel.mesh);
+  const leverPivot = new THREE.Group();
+  leverPivot.position.set(0, 0, -0.03);
+  quadrant.add(leverPivot);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.016, 0.17), metal);
+  arm.position.z = 0.085;
+  leverPivot.add(arm);
+  // T 자 손잡이 (가로 막대 + 고무 감은 끝)
+  const tBar = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.085, 16), black);
+  tBar.rotation.z = Math.PI / 2;
+  tBar.position.z = 0.175;
+  leverPivot.add(tBar);
+  for (const side of [-1, 1]) {
+    const endCap = new THREE.Mesh(new THREE.SphereGeometry(0.016, 14, 10), red);
+    endCap.position.set(side * 0.045, 0, 0.175);
+    leverPivot.add(endCap);
+  }
+  const knobCap = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.012, 0.01), yellow); // 엔진 차단 단추
+  knobCap.position.set(0, 0, 0.192);
+  leverPivot.add(knobCap);
+  // 마찰 잠금 손잡이 (옆)
+  const friction = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.02, 14), metal);
+  friction.rotation.z = Math.PI / 2;
+  friction.position.set(0.062, -0.08, -0.01);
+  quadrant.add(friction);
+  const frictionLabel = canvasPlane(0.07, 0.025, 160, 56);
+  frictionLabel.ctx.fillStyle = '#d9e1ea';
+  frictionLabel.ctx.font = 'bold 30px system-ui, sans-serif';
+  frictionLabel.ctx.textAlign = 'center';
+  frictionLabel.ctx.fillText('추력', 80, 40);
+  frictionLabel.texture.needsUpdate = true;
+  frictionLabel.mesh.position.set(0, -0.145, 0.046);
+  quadrant.add(frictionLabel.mesh);
+
+  // ── 승무원: 나(가운데) + 양옆 승무원 2명 — 의자에 안전띠를 매고 앉아 있다 ──
+  const HIP = [0, -0.15, -0.78]; // 내 엉덩이 (눈 기준)
+  const rel = (p) => [p[0] - HIP[0], p[1] - HIP[1], p[2] - HIP[2]];
+  const mySeat = createCrewSeat({ color: 0x39424e, recline: 0.15, ownSeat: true });
+  mySeat.position.set(...HIP);
+  cabin.add(mySeat);
+  const me = createPilotBody({ suit: 'white', rightHand: rel([0.3, 0.35, -0.26]), leftHand: rel([-0.3, 0.36, -0.29]), recline: 0.15 });
+  me.position.set(...HIP);
+  cabin.add(me);
+  const rightGlove = createGlove('white'); // 조종간을 쥔 오른손 (조종간과 함께 기운다)
+  rightGlove.position.set(0, -0.035, 0.15);
+  rightGlove.rotation.x = -0.2;
+  stickPivot.add(rightGlove);
+  const leftGlove = createGlove('white'); // 스로틀 T 자 손잡이를 쥔 왼손
+  leftGlove.position.set(0.01, -0.03, 0.17);
+  leftGlove.rotation.set(-0.5, 0, 0.2);
+  leverPivot.add(leftGlove);
+  const crew = [];
+  for (const [x, name] of [[-0.98, 'CM2'], [0.98, 'CM3']]) {
+    const seat = createCrewSeat({ color: 0x39424e, recline: 0.15 });
+    seat.position.set(x, HIP[1] - 0.1, HIP[2]);
+    seat.rotation.z = -Math.sign(x) * 0.12; // 가운데 쪽으로 살짝 돌려 앉음
+    cabin.add(seat);
+    const astro = createAstronaut({ suit: 'white', name, hands: x < 0 ? 'lap' : 'panel', recline: 0.15 });
+    astro.group.position.copy(seat.position);
+    astro.group.rotation.z = seat.rotation.z;
+    cabin.add(astro.group);
+    crew.push(astro);
+  }
 
   // ── 머리 위 스위치 패널 ─────────────────────────────────
   const overhead = facing([0, -0.62, -0.78]);
@@ -224,7 +316,7 @@ export function createCockpitControls(cabin, { metal, darkMetal, padMat }) {
   plaque.ctx.font = 'bold 44px system-ui, sans-serif';
   plaque.ctx.fillText('ORBIT PILOT', 256, 78);
   plaque.ctx.font = '28px system-ui, sans-serif';
-  plaque.ctx.fillText('유인 캡슐 1호 · 승무원 1명', 256, 130);
+  plaque.ctx.fillText('유인 캡슐 1호 · 승무원 3명', 256, 130);
   plaque.texture.needsUpdate = true;
   const rightPanel = facing([-1, 0, 0]);
   rightPanel.position.set(-0.0 + 1.53, 0.25, 0.1);
@@ -310,6 +402,7 @@ export function createCockpitControls(cabin, { metal, darkMetal, padMat }) {
      * @param {number} dt 화면 프레임 시간 (s)
      */
     update(vehicle, t, time, dt) {
+      for (const member of crew) member.update(time);
       const c = vehicle.controls ?? {};
       stick.pitch = approach(stick.pitch, c.pitch ?? 0, 12, dt);
       stick.yaw = approach(stick.yaw, c.yaw ?? 0, 12, dt);

@@ -32,7 +32,7 @@ export function createDebrisViews(scene, config) {
         if (!view) {
           const group = rocketView.detachStage(debris.stageIndex);
           const vehicle = debris.vehicle;
-          const flame = maxThrust(vehicle) > 0 ? createEngineFlame(rocketView.stageRadii[debris.stageIndex]) : null;
+          const flame = maxThrust(vehicle) > 0 && !group.userData.noFlame ? createEngineFlame(rocketView.stageRadii[debris.stageIndex]) : null;
           if (flame) group.add(flame.group);
           scene.add(group);
           view = { group, flame };

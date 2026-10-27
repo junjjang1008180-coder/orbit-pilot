@@ -22,6 +22,8 @@ export function createFlightControls(getSimulation, { onUiAction, isEnabled = ()
     toggleRcs: (sim) => sim.toggleRcs(),
     undock: (sim) => sim.undockFromStation(),
     deployParachute: (sim) => sim.deployParachute(),
+    toggleGear: (sim) => sim.toggleGear(),
+    cycleRunway: (sim) => sim.cycleRunway(),
     warpUp: (sim) => sim.increaseTimeWarp(),
     warpDown: (sim) => sim.decreaseTimeWarp(),
   };
@@ -38,7 +40,7 @@ export function createFlightControls(getSimulation, { onUiAction, isEnabled = ()
   return {
     /** 매 프레임 호출: 누르고 있는 키 상태를 시뮬레이션에 전달 */
     update() {
-      const idle = { throttleUp: false, throttleDown: false, pitch: 0, yaw: 0, roll: 0, translate: [0, 0, 0] };
+      const idle = { throttleUp: false, throttleDown: false, pitch: 0, yaw: 0, roll: 0, translate: [0, 0, 0], brake: false };
       getSimulation().setControlInput(isEnabled() ? keyboard.getInput() : idle);
     },
     keyboard,

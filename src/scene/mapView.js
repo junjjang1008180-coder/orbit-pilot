@@ -18,6 +18,7 @@ import { createMoonTexture } from './moonSurface.js';
 import { createAtmosphereGlow } from './atmosphereGlow.js';
 import { createStars } from './skyDome.js';
 import { vec3 } from '../physics/vectorMath.js';
+import { runwayPoint, runwayList } from '../landing/runway.js';
 import { propagateKepler } from '../orbit/kepler.js';
 import { moonState } from '../physics/celestialBodies.js';
 import { ThickLine } from './thickLine.js';
@@ -72,13 +73,22 @@ export function createMapView(config, labelRoot, actions = {}) {
     new THREE.SphereGeometry(atmosphereRadius, 96, 48),
     new THREE.MeshBasicMaterial({ color: 0x5aa9ff, transparent: true, opacity: 0.05, depthWrite: false }),
   );
-  const glow = createAtmosphereGlow(atmosphereRadius * 1.01);
+  const glow = createAtmosphereGlow(atmosphereRadius * 1.01, null, { planetRadius: toMapLength(config.planet.radius), scaleHeight: toMapLength(16_000) });
   scene.add(planet, clouds, grid, atmosphere, glow.mesh);
 
   // 발사장 표시
   const site = makeMarker(0xff8844);
   toMapPosition(config.launchSite.direction.map((v) => v * config.planet.radius), site.position);
   scene.add(site);
+  // 우주 왕복선 활주로들 표시 (왕복선을 날릴 때만)
+  const runwayDefs = runwayList(config);
+  const runwayMarkers = runwayDefs.map((r) => {
+    const m = makeMarker(0x5fd6ff);
+    toMapPosition(runwayPoint(config, 0, 0, 0, r), m.position);
+    m.visible = false;
+    scene.add(m);
+    return m;
+  });
 
   // 굵은 선 (화면 두께 일정)
   const lines = [];
@@ -172,6 +182,7 @@ export function createMapView(config, labelRoot, actions = {}) {
     <div class="map-label map-label-ap" data-id="ap"></div>
     <div class="map-label map-label-pe" data-id="pe"></div>
     <div class="map-label map-label-zone" data-id="zone">착륙 지점</div>
+    ${runwayDefs.map((r, i) => `<div class="map-label map-label-runway" data-id="runway-${i}">🛬 ${r.name}</div>`).join('')}
     <div class="map-label map-label-station" data-id="station">우주 정거장</div>
     <div class="map-label map-label-node" data-id="node">기동 노드</div>
     <div class="map-label map-label-moon" data-id="moon">달</div>
@@ -199,6 +210,7 @@ export function createMapView(config, labelRoot, actions = {}) {
     ap: $('ap'),
     pe: $('pe'),
     zone: $('zone'),
+    runways: runwayDefs.map((_, i) => $(`runway-${i}`)),
     station: $('station'),
     node: $('node'),
     moon: $('moon'),
@@ -409,6 +421,13 @@ export function createMapView(config, labelRoot, actions = {}) {
         size(zoneMarker, 0.8);
       }
 
+      // 활주로
+      const targetRunway = simulation.rocket?.isShuttle ? simulation.activeRunway?.(simulation.state)?.id : null;
+      runwayMarkers.forEach((m, i) => {
+        m.visible = Boolean(simulation.rocket?.isShuttle);
+        if (m.visible) size(m, runwayDefs[i].id === targetRunway ? 1.1 : 0.7);
+      });
+
       // 우주 정거장과 그 궤도선
       const station = simulation.station;
       stationMarker.visible = Boolean(station);
@@ -458,6 +477,10 @@ export function createMapView(config, labelRoot, actions = {}) {
       placeLabel(labels.station, stationMarker, camera, width, height);
       placeLabel(labels.rocket, rocketMarker, camera, width, height, state === simulation.state ? `로켓 · ${formatDistance(t.altitude)}` : '부스터');
       placeLabel(labels.zone, zoneMarker, camera, width, height);
+      runwayMarkers.forEach((m, i) => {
+        placeLabel(labels.runways[i], m, camera, width, height);
+        labels.runways[i].dataset.target = String(runwayDefs[i].id === targetRunway);
+      });
       placeLabel(labels.ap, apMarker, camera, width, height, `원지점 ${formatDistance(orbit.apoapsisAltitude)}${t.timeToApoapsis !== null ? ` · ${shortTime(t.timeToApoapsis)} 뒤` : ''}`);
       placeLabel(labels.pe, peMarker, camera, width, height, `${body.id === 'moon' ? '달 ' : ''}근지점 ${formatDistance(orbit.periapsisAltitude)}${t.timeToPeriapsis !== null ? ` · ${shortTime(t.timeToPeriapsis)} 뒤` : ''}`);
       placeLabel(labels.moon, moonGroup, camera, width, height, '🌕 달');

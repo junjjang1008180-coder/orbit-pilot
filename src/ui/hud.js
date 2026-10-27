@@ -25,6 +25,10 @@ export function createHud(root) {
         <div class="hud-landing-title" data-id="landing-title"></div>
         <dl class="hud-values" data-id="landing"></dl>
       </section>
+      <section class="hud-box hud-landing hud-shuttle" data-id="shuttle-box" aria-label="우주 왕복선 착륙 안내" hidden>
+        <div class="hud-landing-title" data-id="shuttle-title"></div>
+        <dl class="hud-values" data-id="shuttle"></dl>
+      </section>
       <section class="hud-box hud-maneuver" data-id="maneuver-box" aria-label="기동 계획" hidden></section>
       <section class="hud-box hud-target" data-id="target-box" aria-label="도킹 목표" hidden>
         <div class="hud-target-title" data-id="target-title"></div>
@@ -64,6 +68,7 @@ export function createHud(root) {
         <li><kbd>.</kbd>/<kbd>,</kbd> 시간 가속 빠르게/느리게</li>
         <li><kbd>R</kbd> RCS · <kbd>H</kbd>/<kbd>N</kbd> 앞뒤 · <kbd>J</kbd>/<kbd>L</kbd> 좌우 · <kbd>I</kbd>/<kbd>K</kbd> 아래위 · <kbd>U</kbd> 분리</li>
         <li><kbd>P</kbd> 낙하산 펼치기 · <kbd>C</kbd> 1인칭 시점</li>
+        <li><kbd>Y</kbd> 착륙 바퀴 · <kbd>V</kbd> 브레이크·에어브레이크 · <kbd>O</kbd> 목표 활주로 <small>(우주 왕복선)</small></li>
         <li>드래그 카메라 회전 · 휠/핀치 확대/축소</li>
       </ul>
     </section>
@@ -87,6 +92,9 @@ export function createHud(root) {
   const targetRows = $('target');
   const targetHint = $('target-hint');
   const gauges = createGauges($('gauges-left'), $('gauges-right'));
+  const shuttleBox = $('shuttle-box');
+  const shuttleTitle = $('shuttle-title');
+  const shuttleRows = $('shuttle');
   const guideBox = $('guide');
   const guideText = $('guide-text');
 
@@ -121,6 +129,47 @@ export function createHud(root) {
       [td ? '착지 하강 속도' : '하강 속도', `${formatNumber(descent, 1)} / ${lim.maxVerticalSpeed} m/s`, check(descent <= lim.maxVerticalSpeed)],
       [td ? '착지 수평 속도' : '수평 속도', `${formatNumber(horizontal, 1)} / ${lim.maxHorizontalSpeed} m/s`, check(horizontal <= lim.maxHorizontalSpeed)],
       [td ? '착지 기울기' : '기울기', `${formatNumber(tilt, 1)}° / ${lim.maxTiltDeg}°`, check(tilt <= lim.maxTiltDeg)],
+    ]);
+  }
+
+  /** 우주 왕복선 착륙 안내: 궤도선만 남았을 때 활주로까지 거리·활공각·바퀴·착지 기준 */
+  function updateShuttle(t) {
+    const sh = t.shuttle;
+    const show = Boolean(sh?.winged);
+    shuttleBox.hidden = !show;
+    if (!show) return;
+    const lim = sh.limits;
+    const check = (ok) => (ok ? 'hud-ok' : 'hud-warn');
+    const td = t.touchdown?.wheels ? t.touchdown : null;
+    shuttleBox.dataset.result = sh.landed ? 'success' : '';
+    shuttleTitle.textContent = sh.landed
+      ? `✅ ${sh.landedRunway ?? '활주로'} 착륙 성공`
+      : sh.rolling ? '🛬 활주 중 — V 브레이크 · P 감속 낙하산' : `🛬 ${sh.runwayName}${sh.runwayAuto ? ' (자동)' : ''} · 서쪽 끝에서 동쪽으로`;
+    const near = t.altitude < 3_000 && !sh.rolling && !sh.landed;
+    const descent = td ? td.verticalSpeed : Math.max(0, -t.verticalSpeed);
+    shuttleRows.innerHTML = rows([
+      ...(sh.rolling || sh.landed
+        ? [
+            ['착지 하강 속도', td ? `${formatNumber(td.verticalSpeed, 1)} m/s` : '-', td ? 'hud-ok' : ''],
+            ['착지 속력', td ? `${formatNumber(td.horizontalSpeed, 0)} m/s` : '-'],
+            ['활주로 남은 길이', `${formatNumber(Math.max(0, sh.runwayHalfLength - sh.runwayAlong), 0)} m`],
+            ['브레이크', sh.brakes ? '작동 중' : '<small>V 를 누르고 있기</small>', sh.brakes ? 'hud-ok' : ''],
+          ]
+        : [
+            ['활주로까지', `${formatDistance(sh.distanceToThreshold)} <small>방위 ${formatNumber(sh.bearingDeg, 0).padStart(3, '0')}°</small>`],
+            ['목표 바꾸기', `<kbd>O</kbd> <small>(활주로 ${sh.runwayCount}곳 · 자동 = 가장 먼저 닿는 곳)</small>`],
+            ['활공각', `${formatNumber(sh.glideSlopeDeg, 1)}° <small>(목표 18°)</small>`, Math.abs(sh.glideSlopeDeg - 18) < 4 ? 'hud-ok' : ''],
+            ['중심선에서', `${formatNumber(Math.abs(sh.runwayCross), 0)} m ${sh.runwayCross > 0 ? '북' : '남'}`, Math.abs(sh.runwayCross) < 40 ? 'hud-ok' : ''],
+            ['받음각 · 뱅크', `${formatNumber(sh.alphaDeg, 1)}° · ${formatNumber(sh.bankDeg, 0)}°`],
+            ['에어브레이크', `${formatNumber(sh.speedbrake * 100, 0)} % <small>(V)</small>`],
+            ['착륙 바퀴', sh.gearDown ? '내림' : '올림 <small>(Y 로 내리기)</small>', sh.gearDown ? 'hud-ok' : near ? 'hud-warn' : ''],
+            ...(near
+              ? [
+                  ['하강 속도', `${formatNumber(descent, 1)} / ${lim.maxVerticalSpeed} m/s`, check(descent <= lim.maxVerticalSpeed)],
+                  ['속력', `${formatNumber(t.speed, 0)} / ${lim.maxSpeed} m/s`, check(t.speed <= lim.maxSpeed)],
+                ]
+              : []),
+          ]),
     ]);
   }
 
@@ -222,6 +271,7 @@ export function createHud(root) {
         .join('');
 
       updateLanding(t);
+      updateShuttle(t);
       updateTarget(t);
       gauges.update(t);
 
@@ -260,6 +310,12 @@ const PHASE_LABELS = {
   separate: '회수 캡슐만 남기기',
   entry: '재진입 (열 차폐막 앞으로)',
   chute: '낙하산 하강',
+  deorbitWait: '역추진 시점 기다림',
+  deorbitBurn: '역추진',
+  glideEntry: '재진입 (배 쪽 타일로)',
+  glideApproach: '활공 접근 (18°)',
+  flare: '플레어 (기수 들기)',
+  rollout: '활주·감속',
 };
 
 /** 경과 시간 → "T+00:12:34" */
@@ -294,7 +350,7 @@ function thermalRows(t) {
     ]);
   }
   const p = t.parachute;
-  if (p?.available) {
+  if (p?.available && !(t.shuttle && !t.shuttle.winged)) { // 왕복선 감속 낙하산은 궤도선만 남은 뒤에
     const text =
       p.state === 'torn' ? '찢어짐'
       : p.state === 'deployed' ? (p.area >= p.fullArea - 1e-6 ? '다 펼침' : `펼치는 중 (${formatNumber(p.area, 0)} m²)`)
@@ -342,6 +398,8 @@ function bannerStatus(t) {
   if (t.autopilot?.message && !t.destroyed) return { text: `🤖 ${t.autopilot.message}`, level: 'info' };
   if (t.destroyed) return { text: `기체 파손 — ${t.destroyedReason} (재시작 버튼으로 다시 시작)`, level: 'danger' };
   if (t.aborted) return { text: '비상 중단 — 엔진 정지, 조종 잠김 (재시작 버튼으로 다시 시작)', level: 'danger' };
+  if (t.shuttle?.landed) return { text: '🛬 활주로에 멈췄어요 — 우주 왕복선 착륙 완료!', level: 'success' };
+  if (t.shuttle?.rolling) return { text: '🛬 바퀴 착지 성공 — 활주로를 달리는 중 (V 브레이크 · P 감속 낙하산)', level: 'success' };
   if (t.landed && t.hasLiftedOff && t.landedOn !== 'moon' && t.touchdown?.safe) {
     return { text: t.parachute?.state === 'deployed' ? '🪂 낙하산으로 안전하게 내려왔어요 — 회수 완료' : '안전하게 착지했어요', level: 'success' };
   }

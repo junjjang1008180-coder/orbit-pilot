@@ -45,3 +45,19 @@ export function steerToward(vehicle, direction, autopilotConfig) {
 export function noseOf(vehicle) {
   return quat.rotate(vehicle.orientation, NOSE_LOCAL);
 }
+
+/**
+ * 기수 방향과 윗면 방향을 함께 맞추는 입력 (날개 달린 궤도선용 — 뱅크 각까지 잡는다)
+ * 롤 오차 = 지금 윗면을 원하는 윗면(기수에 수직으로 투영)으로 돌리는 기수 축 둘레 각
+ */
+export function steerAttitude(vehicle, noseDirection, topDirection, autopilotConfig) {
+  const out = steerToward(vehicle, noseDirection, autopilotConfig);
+  const nose = quat.rotate(vehicle.orientation, NOSE_LOCAL);
+  const top = quat.rotate(vehicle.orientation, [0, 0, 1]);
+  const wanted = vec3.addScaled(topDirection, nose, -vec3.dot(topDirection, nose));
+  if (vec3.length(wanted) < 1e-6) return out;
+  const tp = vec3.normalize(wanted);
+  const error = Math.atan2(vec3.dot(vec3.cross(top, tp), nose), vec3.dot(top, tp));
+  out.roll = clampUnit(autopilotConfig.attitudeGain * error - autopilotConfig.attitudeDamping * vehicle.angularVelocity[1]);
+  return out;
+}
