@@ -15,10 +15,14 @@ const vertexShader = /* glsl */ `
   #include <logdepthbuf_pars_vertex>
   varying vec3 vNormalView;
   varying vec3 vViewDir;
+  varying vec3 vPosView;    // 이 점의 시점 좌표 (카메라 = 원점)
+  varying vec3 vCenterView; // 행성 중심의 시점 좌표 (구의 원점 = 행성 중심)
   void main() {
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vNormalView = normalize(normalMatrix * normal);
     vViewDir = normalize(-mvPosition.xyz);
+    vPosView = mvPosition.xyz;
+    vCenterView = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     gl_Position = projectionMatrix * mvPosition;
     #include <logdepthbuf_vertex>
   }
@@ -33,6 +37,8 @@ const fragmentShader = (inner) => /* glsl */ `
   uniform float uScaleHeight;  // 빛이 옅어지는 높이 (화면 단위)
   varying vec3 vNormalView;
   varying vec3 vViewDir;
+  varying vec3 vPosView;
+  varying vec3 vCenterView;
   void main() {
     #include <logdepthbuf_fragment>
     vec3 n = normalize(vNormalView);
@@ -41,7 +47,8 @@ const fragmentShader = (inner) => /* glsl */ `
       // 행성 원판 위: 비스듬히 볼수록 대기를 길게 지나 푸르게 (가운데는 거의 투명)
       ? 'float density = 1.0 - exp(-0.05 / max(facing, 0.02));'
       // 행성 둘레: 시선이 행성에 가장 가까이 지나는 높이가 낮을수록 밝다 (지표 바로 위가 가장 밝고 위로 빠르게 옅어짐)
-      : 'float closest = uShellRadius * sqrt(max(0.0, 1.0 - facing * facing)); float density = exp(-max(0.0, closest - uPlanetRadius) / uScaleHeight);'}
+      // 카메라 → 이 점 구간에서 행성 중심에 가장 가까운 거리 (카메라가 대기 안에 있으면 위를 볼 때 카메라 자리 = 내 고도)
+      : 'vec3 rayDir = normalize(vPosView); float tc = clamp(dot(vCenterView, rayDir), 0.0, length(vPosView)); float closest = length(vCenterView - rayDir * tc); float density = exp(-max(0.0, closest - uPlanetRadius) / uScaleHeight);'}
     float sun = dot(n, uSunView);
     float day = smoothstep(-0.3, 0.4, sun);
     float dusk = exp(-pow(sun / 0.2, 2.0)); // 낮·밤 경계
